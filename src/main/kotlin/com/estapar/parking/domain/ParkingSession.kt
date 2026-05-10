@@ -2,16 +2,22 @@ package com.estapar.parking.domain
 
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
-import jakarta.persistence.GeneratedValue
-import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import org.hibernate.annotations.JdbcTypeCode
+import org.hibernate.type.SqlTypes
 import java.math.BigDecimal
 import java.time.Instant
+import java.util.UUID
 
 @Entity
 @Table(name = "parking_sessions")
 class ParkingSession(
+    @Id
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "id", nullable = false, length = 36)
+    var id: UUID = UUID.randomUUID(),
+
     @Column(name = "license_plate", nullable = false, length = 16)
     var licensePlate: String,
 
@@ -24,8 +30,9 @@ class ParkingSession(
     @Column(name = "sector")
     var sector: String? = null,
 
-    @Column(name = "spot_id")
-    var spotId: Long? = null,
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "spot_id", length = 36)
+    var spotId: UUID? = null,
 
     @Column(name = "parked_time")
     var parkedTime: Instant? = null,
@@ -35,9 +42,4 @@ class ParkingSession(
 
     @Column(name = "amount_charged")
     var amountCharged: BigDecimal? = null,
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "id")
-    var id: Long? = null,
 )

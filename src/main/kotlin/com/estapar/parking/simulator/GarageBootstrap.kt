@@ -66,7 +66,6 @@ class GarageBootstrap(
 
         val spots = response.spots.map { dto ->
             Spot(
-                id = dto.id,
                 sector = dto.sector,
                 lat = dto.lat,
                 lng = dto.lng,

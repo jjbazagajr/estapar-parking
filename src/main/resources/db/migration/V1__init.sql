@@ -1,5 +1,6 @@
 CREATE TABLE sectors (
-    name                    VARCHAR(32)    NOT NULL PRIMARY KEY,
+    id                      CHAR(36)       NOT NULL PRIMARY KEY,
+    name                    VARCHAR(32)    NOT NULL UNIQUE,
     base_price              DECIMAL(10, 2) NOT NULL,
     max_capacity            INT            NOT NULL,
     open_hour               TIME           NULL,
@@ -8,7 +9,7 @@ CREATE TABLE sectors (
 ) ENGINE = InnoDB;
 
 CREATE TABLE spots (
-    id        BIGINT      NOT NULL PRIMARY KEY,
+    id        CHAR(36)    NOT NULL PRIMARY KEY,
     sector    VARCHAR(32) NOT NULL,
     lat       DOUBLE      NOT NULL,
     lng       DOUBLE      NOT NULL,
@@ -20,10 +21,10 @@ CREATE INDEX idx_spots_sector ON spots (sector);
 CREATE INDEX idx_spots_latlng ON spots (lat, lng);
 
 CREATE TABLE parking_sessions (
-    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id                  CHAR(36)       NOT NULL PRIMARY KEY,
     license_plate       VARCHAR(16)    NOT NULL,
     sector              VARCHAR(32)    NULL,
-    spot_id             BIGINT         NULL,
+    spot_id             CHAR(36)       NULL,
     entry_time          TIMESTAMP(3)   NOT NULL,
     parked_time         TIMESTAMP(3)   NULL,
     exit_time           TIMESTAMP(3)   NULL,
