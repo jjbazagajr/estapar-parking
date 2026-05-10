@@ -2,6 +2,8 @@ package com.estapar.parking.domain
 
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
+import jakarta.persistence.GeneratedValue
+import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import org.hibernate.annotations.JdbcTypeCode
@@ -14,9 +16,10 @@ import java.util.UUID
 @Table(name = "sectors")
 class Sector(
     @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
     @JdbcTypeCode(SqlTypes.CHAR)
     @Column(name = "id", nullable = false, length = 36)
-    var id: UUID = UUID.randomUUID(),
+    var id: UUID? = null,
 
     @Column(name = "name", nullable = false, length = 32, unique = true)
     var name: String,
