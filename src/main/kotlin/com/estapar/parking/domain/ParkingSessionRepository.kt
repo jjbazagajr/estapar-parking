@@ -5,9 +5,8 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.math.BigDecimal
 import java.time.Instant
-import java.util.UUID
 
-interface ParkingSessionRepository : JpaRepository<ParkingSession, UUID> {
+interface ParkingSessionRepository : JpaRepository<ParkingSession, Long> {
 
     fun findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(licensePlate: String): ParkingSession?
 

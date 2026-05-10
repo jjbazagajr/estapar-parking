@@ -51,28 +51,37 @@ class GarageBootstrap(
         }
     }
 
-    private fun persist(response: GarageResponse) {
-        val sectors = response.garage.map { dto ->
-            Sector(
-                name = dto.sector,
-                basePrice = dto.basePrice,
-                maxCapacity = dto.maxCapacity,
-                openHour = parseTime(dto.openHour),
-                closeHour = parseTime(dto.closeHour),
-                durationLimitMinutes = dto.durationLimitMinutes,
-            )
-        }
-        sectorRepository.saveAll(sectors)
+    internal fun persist(response: GarageResponse) {
+        response.garage.forEach { dto -> upsertSector(dto) }
+        response.spots.forEach { dto -> upsertSpot(dto) }
+    }
 
-        val spots = response.spots.map { dto ->
-            Spot(
-                sector = dto.sector,
-                lat = dto.lat,
-                lng = dto.lng,
-                occupied = dto.occupied,
-            )
-        }
-        spotRepository.saveAll(spots)
+    private fun upsertSector(dto: SectorDto) {
+        val sector = sectorRepository.findByName(dto.sector) ?: Sector(
+            name = dto.sector,
+            basePrice = dto.basePrice,
+            maxCapacity = dto.maxCapacity,
+        )
+        sector.basePrice = dto.basePrice
+        sector.maxCapacity = dto.maxCapacity
+        sector.openHour = parseTime(dto.openHour)
+        sector.closeHour = parseTime(dto.closeHour)
+        sector.durationLimitMinutes = dto.durationLimitMinutes
+        sectorRepository.save(sector)
+    }
+
+    private fun upsertSpot(dto: SpotDto) {
+        val spot = spotRepository.findById(dto.id).orElse(null) ?: Spot(
+            id = dto.id,
+            sector = dto.sector,
+            lat = dto.lat,
+            lng = dto.lng,
+        )
+        spot.sector = dto.sector
+        spot.lat = dto.lat
+        spot.lng = dto.lng
+        spot.occupied = dto.occupied
+        spotRepository.save(spot)
     }
 
     private fun parseTime(value: String?): LocalTime? {

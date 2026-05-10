@@ -6,20 +6,16 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
-import org.hibernate.annotations.JdbcTypeCode
-import org.hibernate.type.SqlTypes
 import java.math.BigDecimal
 import java.time.Instant
-import java.util.UUID
 
 @Entity
 @Table(name = "parking_sessions")
 class ParkingSession(
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    @JdbcTypeCode(SqlTypes.CHAR)
-    @Column(name = "id", nullable = false, length = 36)
-    var id: UUID? = null,
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id", nullable = false)
+    var id: Long? = null,
 
     @Column(name = "license_plate", nullable = false, length = 16)
     var licensePlate: String,
@@ -33,9 +29,8 @@ class ParkingSession(
     @Column(name = "sector")
     var sector: String? = null,
 
-    @JdbcTypeCode(SqlTypes.CHAR)
-    @Column(name = "spot_id", length = 36)
-    var spotId: UUID? = null,
+    @Column(name = "spot_id")
+    var spotId: Long? = null,
 
     @Column(name = "parked_time")
     var parkedTime: Instant? = null,
