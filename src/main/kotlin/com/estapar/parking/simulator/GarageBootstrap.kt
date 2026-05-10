@@ -62,11 +62,7 @@ class GarageBootstrap(
             basePrice = dto.basePrice,
             maxCapacity = dto.maxCapacity,
         )
-        sector.basePrice = dto.basePrice
-        sector.maxCapacity = dto.maxCapacity
-        sector.openHour = parseTime(dto.openHour)
-        sector.closeHour = parseTime(dto.closeHour)
-        sector.durationLimitMinutes = dto.durationLimitMinutes
+        sector.applyFrom(dto)
         sectorRepository.save(sector)
     }
 
@@ -77,11 +73,23 @@ class GarageBootstrap(
             lat = dto.lat,
             lng = dto.lng,
         )
-        spot.sector = dto.sector
-        spot.lat = dto.lat
-        spot.lng = dto.lng
-        spot.occupied = dto.occupied
+        spot.applyFrom(dto)
         spotRepository.save(spot)
+    }
+
+    private fun Sector.applyFrom(dto: SectorDto) {
+        basePrice = dto.basePrice
+        maxCapacity = dto.maxCapacity
+        openHour = parseTime(dto.openHour)
+        closeHour = parseTime(dto.closeHour)
+        durationLimitMinutes = dto.durationLimitMinutes
+    }
+
+    private fun Spot.applyFrom(dto: SpotDto) {
+        sector = dto.sector
+        lat = dto.lat
+        lng = dto.lng
+        occupied = dto.occupied
     }
 
     private fun parseTime(value: String?): LocalTime? {
