@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: estapar-parking
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: NON_NULL
+  datasource:
+    url: jdbc:mysql://localhost:3306/estapar?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: estapar
+    password: estapar
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        jdbc:
+          time_zone: UTC
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+server:
+  port: 3003
+
+estapar:
+  simulator:
+    base-url: http://localhost:8081
+    bootstrap-enabled: true
+
+logging:
+  level:
+    com.estapar: INFO

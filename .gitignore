@@ -1,0 +1,80 @@
+### Gradle ###
+.gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### Gradle Wrapper (mantém apenas o jar versionado) ###
+!gradle/wrapper/gradle-wrapper.jar
+
+### Kotlin ###
+.kotlin/
+*.kotlin_module
+
+### IntelliJ / JetBrains ###
+.idea/
+*.iml
+*.ipr
+*.iws
+
+### VS Code ###
+.vscode/
+*.code-workspace
+
+### Eclipse / STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### macOS ###
+.DS_Store
+.AppleDouble
+.LSOverride
+
+### Windows ###
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+### Linux ###
+*~
+.directory
+.Trash-*
+
+### Logs ###
+*.log
+logs/
+
+### Environment & secrets ###
+.env
+.env.*
+!.env.example
+*.local
+application-local.yaml
+application-local.yml
+application-local.properties
+
+### Test reports & coverage ###
+test-output/
+.jacoco/
+jacoco.exec
+
+### Editor swap / backup ###
+*.swp
+*.swo
+*.bak
+*.orig

@@ -1,0 +1,33 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: estapar-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: estapar
+      MYSQL_USER: estapar
+      MYSQL_PASSWORD: estapar
+    ports:
+      - "3306:3306"
+    volumes:
+      - estapar-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  garage-sim:
+    image: cfontes0estapar/garage-sim:1.0.0
+    container_name: estapar-garage-sim
+    platform: linux/amd64
+    ports:
+      - "8081:3000"
+    environment:
+      EXTERNAL_API_URL: http://host.docker.internal:3003/webhook
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  estapar-mysql-data:
