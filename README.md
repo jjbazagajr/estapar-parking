@@ -145,7 +145,7 @@ Antes de implementar ou opinar, consulte:
 
 ## Governança e uso de IA
 
-Este é um projeto de **avaliação técnica**. Diretrizes para qualquer assistente de IA (e para humanos editando o código) ficam em [`CLAUDE.md`](CLAUDE.md), com regras inegociáveis:
+Diretrizes para qualquer assistente de IA (e para humanos editando o código) ficam em [`CLAUDE.md`](CLAUDE.md), com regras inegociáveis:
 
 1. **Zero comentários no código** — nomes autoexplicativos; o "porquê" vai em commits, PRs ou `docs/`.
 2. **PR mínimo e focado** — uma feature por PR; bumps de lib em PR próprio; sem refactor oportunista.
