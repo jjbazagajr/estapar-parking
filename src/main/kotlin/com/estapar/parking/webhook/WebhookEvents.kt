@@ -3,7 +3,7 @@ package com.estapar.parking.webhook
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
-import java.time.Instant
+import java.time.LocalDateTime
 
 @JsonTypeInfo(
     use = JsonTypeInfo.Id.NAME,
@@ -23,7 +23,7 @@ sealed interface WebhookEvent {
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class EntryEvent(
     override val licensePlate: String,
-    val entryTime: Instant,
+    val entryTime: LocalDateTime,
 ) : WebhookEvent
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -36,5 +36,5 @@ data class ParkedEvent(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class ExitEvent(
     override val licensePlate: String,
-    val exitTime: Instant,
+    val exitTime: LocalDateTime,
 ) : WebhookEvent

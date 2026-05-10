@@ -18,6 +18,7 @@ class WebhookService(
 
     @Transactional
     fun handle(event: WebhookEvent) {
+        log.info("evento recebido {}", event);
         when (event) {
             is EntryEvent -> handleEntry(event)
             is ParkedEvent -> handleParked(event)
