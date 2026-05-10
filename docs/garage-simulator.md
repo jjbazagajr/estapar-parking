@@ -7,7 +7,7 @@ Simulador de garagem (`cfontes0estapar/garage-sim:1.0.0`) rodando via Docker.
 ```bash
 docker run -d \
   -p 8081:3000 \
-  -e EXTERNAL_API_URL=http://localhost:3003/webhook \
+  -e CLIENT_WEBHOOK_URL=http://localhost:3003/webhook \
   --name garage-sim \
   cfontes0estapar/garage-sim:1.0.0
 ```
@@ -55,14 +55,14 @@ Base URL: `http://localhost:8081`
 
 ## Webhook (comunicação principal — outbound)
 
-O simulador envia eventos via **POST** para o `client_webhook_url` configurado (definido pela env `EXTERNAL_API_URL`). Sua aplicação precisa implementar esse endpoint para receber eventos de entrada/saída/parking.
+O simulador envia eventos via **POST** para o `client_webhook_url` configurado (definido pela env `CLIENT_WEBHOOK_URL`). Sua aplicação precisa implementar esse endpoint para receber eventos de entrada/saída/parking.
 
 - Intervalo de entrada (default): `5s`
 - Intervalo de saída (default): `15s`
 
 ## Como alterar o endpoint do webhook
 
-A URL do webhook é definida pela variável de ambiente `EXTERNAL_API_URL` na criação do container. **Não é possível alterá-la em runtime** — é necessário recriar o container.
+A URL do webhook é definida pela variável de ambiente `CLIENT_WEBHOOK_URL` na criação do container. **Não é possível alterá-la em runtime** — é necessário recriar o container.
 
 ### Passos
 
@@ -70,10 +70,10 @@ A URL do webhook é definida pela variável de ambiente `EXTERNAL_API_URL` na cr
 # 1) parar e remover o container atual
 docker stop garage-sim && docker rm garage-sim
 
-# 2) recriar com o novo EXTERNAL_API_URL
+# 2) recriar com o novo CLIENT_WEBHOOK_URL
 docker run -d \
   -p 8081:3000 \
-  -e EXTERNAL_API_URL=http://NOVO_HOST:NOVA_PORTA/webhook \
+  -e CLIENT_WEBHOOK_URL=http://NOVO_HOST:NOVA_PORTA/webhook \
   --name garage-sim \
   cfontes0estapar/garage-sim:1.0.0
 
@@ -95,7 +95,7 @@ Exemplo (macOS):
 ```bash
 docker run -d \
   -p 8081:3000 \
-  -e EXTERNAL_API_URL=http://host.docker.internal:3003/webhook \
+  -e CLIENT_WEBHOOK_URL=http://host.docker.internal:3003/webhook \
   --name garage-sim \
   cfontes0estapar/garage-sim:1.0.0
 ```

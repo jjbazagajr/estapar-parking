@@ -25,7 +25,7 @@ services:
     ports:
       - "8081:3000"
     environment:
-      EXTERNAL_API_URL: http://host.docker.internal:3003/webhook
+      CLIENT_WEBHOOK_URL: http://host.docker.internal:3003/webhook
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
