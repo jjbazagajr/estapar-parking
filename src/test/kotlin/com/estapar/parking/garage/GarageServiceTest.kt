@@ -222,12 +222,12 @@ class GarageServiceTest {
     }
 
     @Test
-    fun `given markParked retorna 0 (sessao ja parqueada) when park vehicle then lanca SessionAlreadyParkedException`() {
+    fun `given markParked retorna 0 (sessao ja parqueada) when park vehicle then lanca SessionAlreadyParkedException e nao ocupa a vaga`() {
         // given
+        val spot = spotAt(id = 7, sector = "A")
         `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
             .thenReturn(openSession())
-        `when`(spots.findFirstByLatAndLng(lat, lng))
-            .thenReturn(spotAt(id = 7, sector = "A"))
+        `when`(spots.findFirstByLatAndLng(lat, lng)).thenReturn(spot)
         `when`(sectors.findByName("A"))
             .thenReturn(sectorOpenBetween("A", null, null))
         `when`(
@@ -241,6 +241,7 @@ class GarageServiceTest {
 
         // when / then
         assertFailsWith<SessionAlreadyParkedException> { service.parkVehicle(plate, lat, lng) }
+        assertEquals(false, spot.occupied)
     }
 
     @Test
@@ -632,10 +633,11 @@ class GarageServiceTest {
     }
 
     @Test
-    fun `given markExited retorna 0 (sessao ja encerrada) when process exit then lanca SessionAlreadyExitedException`() {
+    fun `given markExited retorna 0 (sessao ja encerrada) when process exit then lanca SessionAlreadyExitedException e nao libera a vaga`() {
         // given
+        val spot = spotAt(id = 7, sector = "A", occupied = true)
         stubSession(parkedSession(anyTime))
-        stubSpot(7L, spotAt(id = 7, sector = "A", occupied = true))
+        stubSpot(7L, spot)
         stubSector("A", BigDecimal("40.50"))
         `when`(
             sessions.markExited(
@@ -649,6 +651,7 @@ class GarageServiceTest {
         assertFailsWith<SessionAlreadyExitedException> {
             service.processExit(plate, anyTime.plusHours(1))
         }
+        assertEquals(true, spot.occupied)
     }
 
     private fun stubOpenGarage() {
