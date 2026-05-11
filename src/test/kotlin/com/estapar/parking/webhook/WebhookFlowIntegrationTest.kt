@@ -5,7 +5,6 @@ import com.estapar.parking.domain.Sector
 import com.estapar.parking.domain.SectorRepository
 import com.estapar.parking.domain.Spot
 import com.estapar.parking.domain.SpotRepository
-import org.hamcrest.Matchers.containsString
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -125,7 +124,7 @@ class WebhookFlowIntegrationTest {
     }
 
     @Test
-    fun `given placa com ENTRY sem PARKED when EXIT then retorna 409 e mantem session aberta`() {
+    fun `given placa com ENTRY sem PARKED when EXIT then responde 200 e mantem session aberta`() {
         // given (setup pré-popula sector A + 1 spot)
         mockMvc.post("/webhook") {
             contentType = MediaType.APPLICATION_JSON
@@ -139,8 +138,7 @@ class WebhookFlowIntegrationTest {
             contentType = MediaType.APPLICATION_JSON
             content = """{"event_type":"EXIT","license_plate":"$plate","exit_time":"2026-05-10T12:10:00"}"""
         }.andExpect {
-            status { isConflict() }
-            jsonPath("$.message") { value(containsString("ainda não estacionou")) }
+            status { isOk() }
         }
 
         // then sessão permanece aberta (não fechada nem precificada)
@@ -149,5 +147,28 @@ class WebhookFlowIntegrationTest {
         assertNull(open.exitTime)
         assertNull(open.amountCharged)
         assertNull(open.spotId)
+    }
+
+    @Test
+    fun `given placa com sessao aberta when novo ENTRY then responde 200 e nao duplica sessao`() {
+        // given primeira ENTRY
+        mockMvc.post("/webhook") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"event_type":"ENTRY","license_plate":"$plate","entry_time":"2026-05-10T12:00:00"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+
+        // when segunda ENTRY com a sessão original ainda aberta
+        mockMvc.post("/webhook") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"event_type":"ENTRY","license_plate":"$plate","entry_time":"2026-05-10T12:05:00"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+
+        // then continua apenas uma sessão aberta para a placa
+        val abertas = sessions.findAll().filter { it.licensePlate == plate && it.exitTime == null }
+        assertEquals(1, abertas.size)
     }
 }
