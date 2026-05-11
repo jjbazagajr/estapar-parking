@@ -119,7 +119,7 @@ A receita de um setor em uma data é a soma de `amount_charged` das sessões com
 
 ## Fora do escopo
 
-- Autenticação/autorização (não pedido pelo desafio).
+- Autenticação/autorização.
 - Painel/UI.
 - Integração com sistemas de cobrança/pagamento.
 - Relatórios diferentes do `/revenue`.

@@ -34,4 +34,11 @@ class Sector(
 
     @Column(name = "duration_limit_minutes")
     var durationLimitMinutes: Int? = null,
-)
+) {
+
+    fun isOpenAt(time: LocalTime): Boolean {
+        val open = openHour ?: return true
+        val close = closeHour ?: return true
+        return time in open..close
+    }
+}
