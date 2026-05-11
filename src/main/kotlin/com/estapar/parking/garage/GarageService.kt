@@ -26,21 +26,14 @@ class GarageService(
         if (sectors.findAll().none { it.isOpenAt(time.toLocalTime()) }) {
             throw GarageClosedException()
         }
-        val total = spots.count()
-        val occupied = spots.countByOccupiedTrue()
-        if (total == 0L || occupied >= total) {
-            throw GarageFullException()
-        }
         if (sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate) != null) {
             throw SessionAlreadyOpenException(plate)
         }
 
-        val multiplier = priceMultiplierFor(occupied.toDouble() / total)
         sessions.save(
             ParkingSession(
                 licensePlate = plate,
                 entryTime = time.toInstant(ZoneOffset.UTC),
-                priceMultiplier = multiplier,
             ),
         )
     }
@@ -54,22 +47,30 @@ class GarageService(
             ?: throw SpotNotFoundException(lat, lng)
         if (spot.occupied) throw SpotAlreadyOccupiedException(lat, lng)
 
-        val now = clock.instant()
-        val sector = sectors.findByName(spot.sector)
+        val sector = sectors.findByNameForUpdate(spot.sector)
             ?: throw SectorMissingException(spot.sector)
+
+        val now = clock.instant()
         if (!sector.isOpenAt(now.atZone(ZoneOffset.UTC).toLocalTime())) {
             throw SectorClosedException(sector.name)
         }
+
+        val occupied = spots.countBySectorAndOccupiedTrue(sector.name)
+        if (occupied >= sector.maxCapacity) throw SectorFullException(sector.name)
+
+        val multiplier = priceMultiplierFor(occupied.toDouble() / sector.maxCapacity)
+
+        val taken = spots.tryOccupy(spot.id)
+        if (taken == 0) throw SpotAlreadyOccupiedException(lat, lng)
 
         val claimed = sessions.markParked(
             id = requireNotNull(session.id) { "session sem id" },
             parkedTime = now,
             sector = spot.sector,
             spotId = spot.id,
+            multiplier = multiplier,
         )
         if (claimed == 0) throw SessionAlreadyParkedException(plate)
-
-        spot.occupied = true
     }
 
     @Transactional
@@ -78,6 +79,7 @@ class GarageService(
             ?: throw SessionNotFoundException(plate)
         val spotId = session.spotId ?: throw SessionNotParkedException(plate)
         val sectorName = session.sector ?: throw SessionNotParkedException(plate)
+        val multiplier = session.priceMultiplier ?: throw SessionNotParkedException(plate)
 
         val exitInstant = time.toInstant(ZoneOffset.UTC)
         val seconds = Duration.between(session.entryTime, exitInstant).seconds
@@ -88,7 +90,7 @@ class GarageService(
         val sector = sectors.findByName(sectorName)
             ?: throw SectorMissingException(sectorName)
 
-        val amount = calculateFee(seconds, sector.basePrice, session.priceMultiplier)
+        val amount = calculateFee(seconds, sector.basePrice, multiplier)
 
         val closed = sessions.markExited(
             id = requireNotNull(session.id) { "session sem id" },

@@ -83,10 +83,10 @@ class WebhookFlowIntegrationTest {
             status { isOk() }
         }
 
-        // then ENTRY persistiu sessão com multiplicador da garagem vazia
+        // then ENTRY persistiu sessão sem multiplicador (definido no PARKED)
         val afterEntry = sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate)
         assertNotNull(afterEntry)
-        assertEquals(0, BigDecimal("0.900").compareTo(afterEntry.priceMultiplier))
+        assertNull(afterEntry.priceMultiplier)
         assertNull(afterEntry.spotId)
         assertNull(afterEntry.exitTime)
 
@@ -98,12 +98,13 @@ class WebhookFlowIntegrationTest {
             status { isOk() }
         }
 
-        // then PARKED vinculou vaga e marcou ocupada
+        // then PARKED vinculou vaga, marcou ocupada e congelou multiplicador do setor (0/1 -> 0.900)
         val afterParked = sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate)
         assertNotNull(afterParked)
         assertEquals(1L, afterParked.spotId)
         assertEquals("A", afterParked.sector)
         assertNotNull(afterParked.parkedTime)
+        assertEquals(0, BigDecimal("0.900").compareTo(afterParked.priceMultiplier))
         assertEquals(true, spots.findById(1L).orElseThrow().occupied)
 
         // when EXIT 1 hora depois

@@ -17,7 +17,8 @@ interface ParkingSessionRepository : JpaRepository<ParkingSession, Long> {
         UPDATE ParkingSession s
            SET s.parkedTime = :parkedTime,
                s.sector = :sector,
-               s.spotId = :spotId
+               s.spotId = :spotId,
+               s.priceMultiplier = :multiplier
          WHERE s.id = :id
            AND s.parkedTime IS NULL
         """
@@ -27,6 +28,7 @@ interface ParkingSessionRepository : JpaRepository<ParkingSession, Long> {
         @Param("parkedTime") parkedTime: Instant,
         @Param("sector") sector: String,
         @Param("spotId") spotId: Long,
+        @Param("multiplier") multiplier: BigDecimal,
     ): Int
 
     @Modifying

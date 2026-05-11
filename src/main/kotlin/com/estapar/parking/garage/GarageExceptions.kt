@@ -5,11 +5,11 @@ sealed class WebhookEventIgnored(message: String) : RuntimeException(message)
 class SessionAlreadyOpenException(plate: String) :
     WebhookEventIgnored("Já existe sessão aberta para placa $plate")
 
-class GarageFullException :
-    WebhookEventIgnored("Garagem está com lotação máxima")
-
 class GarageClosedException :
     WebhookEventIgnored("Garagem fechada no momento")
+
+class SectorFullException(sector: String) :
+    WebhookEventIgnored("Setor $sector está com lotação máxima")
 
 class SessionNotFoundException(plate: String) :
     WebhookEventIgnored("Não existe sessão aberta para placa $plate")

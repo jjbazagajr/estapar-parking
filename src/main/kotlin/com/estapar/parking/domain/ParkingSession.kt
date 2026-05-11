@@ -23,8 +23,8 @@ class ParkingSession(
     @Column(name = "entry_time", nullable = false)
     var entryTime: Instant,
 
-    @Column(name = "price_multiplier", nullable = false)
-    var priceMultiplier: BigDecimal,
+    @Column(name = "price_multiplier")
+    var priceMultiplier: BigDecimal? = null,
 
     @Column(name = "sector")
     var sector: String? = null,
