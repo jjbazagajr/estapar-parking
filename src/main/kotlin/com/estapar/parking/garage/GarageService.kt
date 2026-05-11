@@ -49,7 +49,6 @@ class GarageService(
     fun parkVehicle(plate: String, lat: Double, lng: Double) {
         val session = sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate)
             ?: throw SessionNotFoundException(plate)
-        if (session.spotId != null) throw SessionAlreadyParkedException(plate)
 
         val spot = spots.findFirstByLatAndLng(lat, lng)
             ?: throw SpotNotFoundException(lat, lng)
@@ -62,10 +61,15 @@ class GarageService(
             throw SectorClosedException(sector.name)
         }
 
+        val claimed = sessions.markParked(
+            id = requireNotNull(session.id) { "session sem id" },
+            parkedTime = now,
+            sector = spot.sector,
+            spotId = spot.id,
+        )
+        if (claimed == 0) throw SessionAlreadyParkedException(plate)
+
         spot.occupied = true
-        session.sector = spot.sector
-        session.spotId = spot.id
-        session.parkedTime = now
     }
 
     @Transactional
@@ -86,9 +90,14 @@ class GarageService(
 
         val amount = calculateFee(seconds, sector.basePrice, session.priceMultiplier)
 
+        val closed = sessions.markExited(
+            id = requireNotNull(session.id) { "session sem id" },
+            exitTime = exitInstant,
+            amount = amount,
+        )
+        if (closed == 0) throw SessionAlreadyExitedException(plate)
+
         spot.occupied = false
-        session.exitTime = exitInstant
-        session.amountCharged = amount
     }
 
     private fun priceMultiplierFor(occupancy: Double): BigDecimal = when {

@@ -31,3 +31,6 @@ class SectorMissingException(sector: String) :
 
 class SessionNotParkedException(plate: String) :
     WebhookEventIgnored("Sessão da placa $plate ainda não estacionou")
+
+class SessionAlreadyExitedException(plate: String) :
+    WebhookEventIgnored("Sessão da placa $plate já foi encerrada")

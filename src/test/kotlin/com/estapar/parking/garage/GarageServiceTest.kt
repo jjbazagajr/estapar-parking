@@ -6,8 +6,11 @@ import com.estapar.parking.domain.Sector
 import com.estapar.parking.domain.SectorRepository
 import com.estapar.parking.domain.Spot
 import com.estapar.parking.domain.SpotRepository
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
+import org.mockito.ArgumentMatchers.anyLong
+import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.`when`
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
@@ -36,6 +39,26 @@ class GarageServiceTest {
     private val plate = "ABC1D23"
     private val lat = -23.561684
     private val lng = -46.655981
+    private val sessionId = 42L
+
+    @BeforeEach
+    fun stubAtomicUpdatesSucceed() {
+        `when`(
+            sessions.markParked(
+                anyLong(),
+                anyInstantArg(),
+                anyString(),
+                anyLong(),
+            ),
+        ).thenReturn(1)
+        `when`(
+            sessions.markExited(
+                anyLong(),
+                anyInstantArg(),
+                anyBigDecimalArg(),
+            ),
+        ).thenReturn(1)
+    }
 
     @Test
     fun `given garagem com 20 porcento ocupacao when register entry then salva sessao com multiplicador 0_90`() {
@@ -199,14 +222,22 @@ class GarageServiceTest {
     }
 
     @Test
-    fun `given sessao ja tem spot vinculado when park vehicle then lanca SessionAlreadyParkedException`() {
+    fun `given markParked retorna 0 (sessao ja parqueada) when park vehicle then lanca SessionAlreadyParkedException`() {
         // given
-        val session = openSession().apply {
-            spotId = 99L
-            sector = "A"
-        }
         `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
-            .thenReturn(session)
+            .thenReturn(openSession())
+        `when`(spots.findFirstByLatAndLng(lat, lng))
+            .thenReturn(spotAt(id = 7, sector = "A"))
+        `when`(sectors.findByName("A"))
+            .thenReturn(sectorOpenBetween("A", null, null))
+        `when`(
+            sessions.markParked(
+                anyLong(),
+                anyInstantArg(),
+                anyString(),
+                anyLong(),
+            ),
+        ).thenReturn(0)
 
         // when / then
         assertFailsWith<SessionAlreadyParkedException> { service.parkVehicle(plate, lat, lng) }
@@ -281,7 +312,7 @@ class GarageServiceTest {
     }
 
     @Test
-    fun `given sessao valida e vaga livre when park vehicle then atualiza sessao com sector spotId e parkedTime`() {
+    fun `given sessao valida e vaga livre when park vehicle then chama markParked com sector spotId e parkedTime`() {
         // given
         val session = openSession()
         val spot = spotAt(id = 7, sector = "A")
@@ -295,10 +326,11 @@ class GarageServiceTest {
         service.parkVehicle(plate, lat, lng)
 
         // then
-        assertEquals("A", session.sector)
-        assertEquals(7L, session.spotId)
-        assertNotNull(session.parkedTime)
-        assertEquals(fixedInstant, session.parkedTime)
+        val call = capturedMarkParkedCall()
+        assertEquals(sessionId, call.id)
+        assertEquals("A", call.sector)
+        assertEquals(7L, call.spotId)
+        assertEquals(fixedInstant, call.parkedTime)
         verify(sessions, never()).save(org.mockito.ArgumentMatchers.any(ParkingSession::class.java))
     }
 
@@ -393,7 +425,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime)
 
         // then
-        assertEquals(BigDecimal("0.00"), session.amountCharged)
+        assertEquals(BigDecimal("0.00"), capturedExitedAmount())
         assertEquals(false, spot.occupied)
     }
 
@@ -410,7 +442,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusMinutes(30))
 
         // then
-        assertEquals(BigDecimal("0.00"), session.amountCharged)
+        assertEquals(BigDecimal("0.00"), capturedExitedAmount())
         assertEquals(false, spot.occupied)
     }
 
@@ -426,7 +458,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusMinutes(30).plusSeconds(1))
 
         // then 1 × 40.50 × 1.000 = 40.50
-        assertEquals(BigDecimal("40.50"), session.amountCharged)
+        assertEquals(BigDecimal("40.50"), capturedExitedAmount())
     }
 
     @Test
@@ -441,7 +473,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusMinutes(31))
 
         // then
-        assertEquals(BigDecimal("40.50"), session.amountCharged)
+        assertEquals(BigDecimal("40.50"), capturedExitedAmount())
     }
 
     @Test
@@ -456,7 +488,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusMinutes(59))
 
         // then
-        assertEquals(BigDecimal("40.50"), session.amountCharged)
+        assertEquals(BigDecimal("40.50"), capturedExitedAmount())
     }
 
     @Test
@@ -471,7 +503,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusMinutes(60))
 
         // then
-        assertEquals(BigDecimal("40.50"), session.amountCharged)
+        assertEquals(BigDecimal("40.50"), capturedExitedAmount())
     }
 
     @Test
@@ -486,7 +518,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusMinutes(60).plusSeconds(1))
 
         // then 2 × 40.50 × 1.000 = 81.00
-        assertEquals(BigDecimal("81.00"), session.amountCharged)
+        assertEquals(BigDecimal("81.00"), capturedExitedAmount())
     }
 
     @Test
@@ -501,7 +533,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusHours(1).plusMinutes(5))
 
         // then
-        assertEquals(BigDecimal("81.00"), session.amountCharged)
+        assertEquals(BigDecimal("81.00"), capturedExitedAmount())
     }
 
     @Test
@@ -516,7 +548,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusHours(2))
 
         // then
-        assertEquals(BigDecimal("81.00"), session.amountCharged)
+        assertEquals(BigDecimal("81.00"), capturedExitedAmount())
     }
 
     @Test
@@ -531,7 +563,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusHours(1))
 
         // then 1 × 40.50 × 0.900 = 36.4500 → 36.45
-        assertEquals(BigDecimal("36.45"), session.amountCharged)
+        assertEquals(BigDecimal("36.45"), capturedExitedAmount())
     }
 
     @Test
@@ -546,7 +578,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusHours(2))
 
         // then 2 × 4.10 × 1.250 = 10.2500 → 10.25
-        assertEquals(BigDecimal("10.25"), session.amountCharged)
+        assertEquals(BigDecimal("10.25"), capturedExitedAmount())
     }
 
     @Test
@@ -561,7 +593,7 @@ class GarageServiceTest {
         service.processExit(plate, anyTime.plusHours(25))
 
         // then 25 × 40.50 × 1.100 = 1113.7500 → 1113.75
-        assertEquals(BigDecimal("1113.75"), session.amountCharged)
+        assertEquals(BigDecimal("1113.75"), capturedExitedAmount())
     }
 
     @Test
@@ -581,10 +613,9 @@ class GarageServiceTest {
     }
 
     @Test
-    fun `given exit valido when process exit then atualiza sessao com exit_time e amount_charged`() {
+    fun `given exit valido when process exit then chama markExited com exit_time e amount_charged`() {
         // given
-        val session = parkedSession(anyTime)
-        stubSession(session)
+        stubSession(parkedSession(anyTime))
         stubSpot(7L, spotAt(id = 7, sector = "A", occupied = true))
         stubSector("A", BigDecimal("40.50"))
 
@@ -593,10 +624,31 @@ class GarageServiceTest {
         service.processExit(plate, exit)
 
         // then
-        assertNotNull(session.exitTime)
-        assertEquals(exit.toInstant(ZoneOffset.UTC), session.exitTime)
-        assertEquals(BigDecimal("40.50"), session.amountCharged)
+        val call = capturedMarkExitedCall()
+        assertEquals(sessionId, call.id)
+        assertEquals(exit.toInstant(ZoneOffset.UTC), call.exitTime)
+        assertEquals(BigDecimal("40.50"), call.amount)
         verify(sessions, never()).save(org.mockito.ArgumentMatchers.any(ParkingSession::class.java))
+    }
+
+    @Test
+    fun `given markExited retorna 0 (sessao ja encerrada) when process exit then lanca SessionAlreadyExitedException`() {
+        // given
+        stubSession(parkedSession(anyTime))
+        stubSpot(7L, spotAt(id = 7, sector = "A", occupied = true))
+        stubSector("A", BigDecimal("40.50"))
+        `when`(
+            sessions.markExited(
+                anyLong(),
+                anyInstantArg(),
+                anyBigDecimalArg(),
+            ),
+        ).thenReturn(0)
+
+        // when / then
+        assertFailsWith<SessionAlreadyExitedException> {
+            service.processExit(plate, anyTime.plusHours(1))
+        }
     }
 
     private fun stubOpenGarage() {
@@ -623,6 +675,7 @@ class GarageServiceTest {
     }
 
     private fun openSession() = ParkingSession(
+        id = sessionId,
         licensePlate = plate,
         entryTime = anyTime.toInstant(ZoneOffset.UTC),
         priceMultiplier = BigDecimal("1.00"),
@@ -650,6 +703,7 @@ class GarageServiceTest {
         sectorName: String? = "A",
         multiplier: BigDecimal = BigDecimal("1.000"),
     ) = ParkingSession(
+        id = sessionId,
         licensePlate = plate,
         entryTime = entry.toInstant(ZoneOffset.UTC),
         priceMultiplier = multiplier,
@@ -677,5 +731,56 @@ class GarageServiceTest {
 
     private fun stubSector(name: String, basePrice: BigDecimal) {
         `when`(sectors.findByName(name)).thenReturn(sectorWithBasePrice(name, basePrice))
+    }
+
+    private data class MarkParkedCall(
+        val id: Long,
+        val parkedTime: Instant,
+        val sector: String,
+        val spotId: Long,
+    )
+
+    private fun capturedMarkParkedCall(): MarkParkedCall {
+        val idCap = ArgumentCaptor.forClass(Long::class.javaObjectType)
+        val timeCap = ArgumentCaptor.forClass(Instant::class.java)
+        val sectorCap = ArgumentCaptor.forClass(String::class.java)
+        val spotCap = ArgumentCaptor.forClass(Long::class.javaObjectType)
+        verify(sessions).markParked(
+            idCap.capture() ?: 0L,
+            timeCap.capture() ?: Instant.EPOCH,
+            sectorCap.capture() ?: "",
+            spotCap.capture() ?: 0L,
+        )
+        return MarkParkedCall(idCap.value, timeCap.value, sectorCap.value, spotCap.value)
+    }
+
+    private data class MarkExitedCall(
+        val id: Long,
+        val exitTime: Instant,
+        val amount: BigDecimal,
+    )
+
+    private fun capturedMarkExitedCall(): MarkExitedCall {
+        val idCap = ArgumentCaptor.forClass(Long::class.javaObjectType)
+        val timeCap = ArgumentCaptor.forClass(Instant::class.java)
+        val amountCap = ArgumentCaptor.forClass(BigDecimal::class.java)
+        verify(sessions).markExited(
+            idCap.capture() ?: 0L,
+            timeCap.capture() ?: Instant.EPOCH,
+            amountCap.capture() ?: BigDecimal.ZERO,
+        )
+        return MarkExitedCall(idCap.value, timeCap.value, amountCap.value)
+    }
+
+    private fun capturedExitedAmount(): BigDecimal = capturedMarkExitedCall().amount
+
+    private fun anyInstantArg(): Instant {
+        org.mockito.ArgumentMatchers.any(Instant::class.java)
+        return Instant.EPOCH
+    }
+
+    private fun anyBigDecimalArg(): BigDecimal {
+        org.mockito.ArgumentMatchers.any(BigDecimal::class.java)
+        return BigDecimal.ZERO
     }
 }
