@@ -7,6 +7,9 @@ import com.estapar.parking.domain.SpotRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
+import java.math.RoundingMode
+import java.time.Clock
+import java.time.Duration
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
@@ -15,6 +18,7 @@ class GarageService(
     private val sessions: ParkingSessionRepository,
     private val spots: SpotRepository,
     private val sectors: SectorRepository,
+    private val clock: Clock,
 ) {
 
     @Transactional
@@ -41,6 +45,52 @@ class GarageService(
         )
     }
 
+    @Transactional
+    fun parkVehicle(plate: String, lat: Double, lng: Double) {
+        val session = sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate)
+            ?: throw SessionNotFoundException(plate)
+        if (session.spotId != null) throw SessionAlreadyParkedException(plate)
+
+        val spot = spots.findFirstByLatAndLng(lat, lng)
+            ?: throw SpotNotFoundException(lat, lng)
+        if (spot.occupied) throw SpotAlreadyOccupiedException(lat, lng)
+
+        val now = clock.instant()
+        val sector = sectors.findByName(spot.sector)
+            ?: throw SectorMissingException(spot.sector)
+        if (!sector.isOpenAt(now.atZone(ZoneOffset.UTC).toLocalTime())) {
+            throw SectorClosedException(sector.name)
+        }
+
+        spot.occupied = true
+        session.sector = spot.sector
+        session.spotId = spot.id
+        session.parkedTime = now
+    }
+
+    @Transactional
+    fun processExit(plate: String, time: LocalDateTime) {
+        val session = sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate)
+            ?: throw SessionNotFoundException(plate)
+        val spotId = session.spotId ?: throw SessionNotParkedException(plate)
+        val sectorName = session.sector ?: throw SessionNotParkedException(plate)
+
+        val exitInstant = time.toInstant(ZoneOffset.UTC)
+        val seconds = Duration.between(session.entryTime, exitInstant).seconds
+        if (seconds < 0) error("exit_time anterior a entry_time para placa $plate")
+
+        val spot = spots.findById(spotId).orElse(null)
+            ?: error("Spot $spotId referenciado pela sessão $plate não existe")
+        val sector = sectors.findByName(sectorName)
+            ?: throw SectorMissingException(sectorName)
+
+        val amount = calculateFee(seconds, sector.basePrice, session.priceMultiplier)
+
+        spot.occupied = false
+        session.exitTime = exitInstant
+        session.amountCharged = amount
+    }
+
     private fun priceMultiplierFor(occupancy: Double): BigDecimal = when {
         occupancy < 0.25 -> EMPTY
         occupancy < 0.50 -> NORMAL
@@ -48,10 +98,18 @@ class GarageService(
         else -> PEAK
     }
 
+    private fun calculateFee(seconds: Long, basePrice: BigDecimal, multiplier: BigDecimal): BigDecimal {
+        if (seconds <= GRACE_PERIOD_SECONDS) return BigDecimal.ZERO.setScale(2)
+        val hours = Math.ceilDiv(seconds, SECONDS_PER_HOUR).toBigDecimal()
+        return basePrice.multiply(hours).multiply(multiplier).setScale(2, RoundingMode.HALF_EVEN)
+    }
+
     private companion object {
         val EMPTY = BigDecimal("0.90")
         val NORMAL = BigDecimal("1.00")
         val HIGH = BigDecimal("1.10")
         val PEAK = BigDecimal("1.25")
+        const val GRACE_PERIOD_SECONDS = 30L * 60
+        const val SECONDS_PER_HOUR = 3600L
     }
 }

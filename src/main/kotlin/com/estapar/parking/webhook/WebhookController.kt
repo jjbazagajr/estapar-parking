@@ -21,8 +21,8 @@ class WebhookController(
     fun receive(@RequestBody event: WebhookEvent): ResponseEntity<Void> {
         when (event) {
             is EntryEvent -> garage.registerEntry(event.licensePlate, event.entryTime)
-            is ParkedEvent -> Unit
-            is ExitEvent -> Unit
+            is ParkedEvent -> garage.parkVehicle(event.licensePlate, event.lat, event.lng)
+            is ExitEvent -> garage.processExit(event.licensePlate, event.exitTime)
         }
         return ResponseEntity.ok().build()
     }
