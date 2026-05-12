@@ -113,9 +113,12 @@ Cada setor tem `open_hour`, `close_hour` e, opcionalmente, `duration_limit_minut
 |---|---|
 | `sectors` | Configuração lógica: nome, `base_price`, `max_capacity`, janela de funcionamento |
 | `spots` | Vagas físicas vinculadas a um setor: `id`, `sector`, `lat/lng`, `occupied` |
-| `parking_sessions` | Sessão de um veículo: placa, entry/parked/exit, setor, vaga, `price_multiplier`, `amount_charged` |
+| `parking_sessions` | Sessão de um veículo: placa, entry/parked/exit, setor, vaga, `price_multiplier` |
+| `revenue_ledger` | Lançamento financeiro por saída: `session_id` (UNIQUE), `sector`, `amount`, `currency`, `earned_at`, `created_at` |
 
-A receita de um setor em uma data é a soma de `amount_charged` das sessões com `exit_time` no dia.
+A receita é desacoplada da sessão: a cada `EXIT` o `GarageService` publica `AddToRevenueEvent`, e `RevenueService.addRevenue` (listener síncrono na mesma transação) calcula o valor via `PricingPolicy` e grava um lançamento no `revenue_ledger`. A consulta `/revenue` soma `amount` no ledger filtrando por `sector`, `currency` e janela de `earned_at`.
+
+`currency` é gravado no ledger e usado também no filtro/resposta, hoje fixo em `BRL` via constante no `RevenueService` — o schema já está pronto para novas moedas.
 
 ## Fora do escopo
 

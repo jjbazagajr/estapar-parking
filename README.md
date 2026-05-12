@@ -118,12 +118,14 @@ Regras-chave (detalhes em [`docs/contexto.md`](docs/contexto.md)):
 com.estapar.parking
 ├── EstaparParkingApplication.kt
 ├── config/        infra (RestClient, Clock, properties, OpenAPI)
-├── domain/        entidades JPA + repositórios
+├── domain/        entidades JPA + repositórios (inclui revenue_ledger)
 ├── simulator/     cliente HTTP do simulador + bootstrap inicial
 ├── garage/        regras de negócio (ENTRY/PARKED/EXIT) + PricingPolicy
 ├── webhook/       POST /webhook (transporte; delega ao garage)
-└── revenue/       GET /revenue + cálculo de faturamento
+└── revenue/       GET /revenue + AddToRevenueListener (consome evento do EXIT)
 ```
+
+A saída de um veículo dispara `AddToRevenueEvent` publicado por `GarageService.processExit` e consumido por `RevenueService.addRevenue` (listener síncrono na mesma transação), que calcula a tarifa via `PricingPolicy` e grava um lançamento em `revenue_ledger`. Detalhes e racional da escolha sync vs assíncrono em [`docs/arquitetura.md`](docs/arquitetura.md#comunicação-cross-feature-via-spring-events).
 
 | Camada | Responsabilidade |
 |---|---|
@@ -210,7 +212,7 @@ Hoje cada `POST /webhook` processa síncrono dentro de uma transação. Em pico 
   - **contadores atômicos** (`INCR`/`DECR`) de ocupação por setor, eliminando `countBySectorAndOccupiedTrue` a cada `PARKED`/`EXIT`;
   - dedupe de eventos por `event_id` (idempotência forte ponta-a-ponta).
 - **Read replica** dedicado ao `/revenue` — consulta agregada não compete com escrita do webhook no primary.
-- **Materialização da receita**: tabela `revenue_daily(sector, date, total)` atualizada por job batch ou trigger ao `EXIT`. Em 10M+ sessões, `SUM(amount_charged)` em tempo real fica caro mesmo com `idx_sessions_revenue`.
+- **Materialização diária da receita**: a primeira camada de materialização já existe — `revenue_ledger` registra um lançamento por saída (escrito pelo listener de `AddToRevenueEvent`), e `/revenue` soma sobre ele em vez de varrer `parking_sessions`. Em 10M+ saídas/setor/ano ainda vale uma segunda camada — tabela `revenue_daily(sector, currency, date, total)` atualizada por job batch ou trigger no insert do ledger, com `/revenue` consultando direto a agregação.
 
 ### Particionamento e arquivamento
 
@@ -274,7 +276,7 @@ Antes de implementar ou opinar, consulte:
 - [`docs/contexto.md`](docs/contexto.md) — o que a aplicação faz, atores, endpoints, modelo de dados e regras de negócio.
 - [`docs/arquitetura.md`](docs/arquitetura.md) — arquitetura em camadas, decisões técnicas, princípios de código (Clean Code, SOLID, KISS/DRY/YAGNI), Kotlin idiomático, padrão de testes e checklist de PR.
 - [`docs/garage-simulator.md`](docs/garage-simulator.md) — contrato do simulador externo.
-- [`docs/features/`](docs/features) — um doc por feature (`entry`, `parked`, `exit`, `revenue`) com decisões de design, riscos e checklist de execução.
+- [`docs/features/`](docs/features) — um doc por feature (`entry`, `parked`, `exit`, `revenue`, `revenuev2`) com decisões de design, riscos e checklist de execução.
 
 ## Governança e uso de IA
 

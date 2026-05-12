@@ -39,16 +39,17 @@
 ```
 com.estapar.parking
 ├── EstaparParkingApplication.kt   ← entrypoint
-├── config/                        ← infra (RestClient, properties)
-├── domain/                        ← entidades JPA + repositórios
+├── config/                        ← infra (RestClient, Clock, properties, OpenAPI)
+├── domain/                        ← entidades JPA + repositórios (inclui revenue_ledger)
 ├── simulator/                     ← cliente HTTP do simulador + bootstrap
-├── webhook/                       ← endpoint POST + handlers de evento
-└── revenue/                       ← endpoint GET + cálculo de faturamento
+├── garage/                        ← regras de ENTRY/PARKED/EXIT + PricingPolicy
+├── webhook/                       ← endpoint POST (transporte; delega ao garage)
+└── revenue/                       ← endpoint GET + listener de AddToRevenueEvent
 ```
 
 **Por que package-by-feature?**
 - Mudanças num domínio ficam contidas num pacote.
-- Reduz acoplamento entre features: `revenue` não precisa importar nada de `webhook`.
+- Reduz acoplamento entre features: `revenue` não precisa importar nada de `webhook`. A comunicação entre `garage` e `revenue` é mediada por evento de domínio (`AddToRevenueEvent`) — sem chamada direta entre services.
 - `domain/` é a única fronteira compartilhada — o que é compartilhado fica explícito.
 
 ### Camadas
@@ -65,18 +66,36 @@ com.estapar.parking
 ```
 HTTP request
     ▼
-WebhookController.receive(WebhookEvent)        ← bind Jackson, sealed type
+WebhookController.receive(WebhookEvent)        ← bind Jackson, sealed type discriminado por event_type
     ▼
-WebhookService.handle(event)                   ← @Transactional, when sobre tipo
+GarageService.{registerEntry|parkVehicle|processExit}   ← @Transactional, regra por tipo
+    │
+    ├─ EntryEvent  → registerEntry()           ← valida sessão aberta, persiste ParkingSession
+    ├─ ParkedEvent → parkVehicle()             ← aloca vaga, congela price_multiplier
+    └─ ExitEvent   → processExit()             ← grava exit_time, libera vaga,
+                                                  publishEvent(AddToRevenueEvent)
+                                                        ▼
+                                                  RevenueService.addRevenue()   ← @EventListener síncrono,
+                                                                                   mesma TX do exit:
+                                                                                   calcula tarifa via
+                                                                                   PricingPolicy e grava
+                                                                                   revenue_ledger
     ▼
-EntryEvent  → handleEntry()                    ← regra: lotação, preço dinâmico
-ParkedEvent → handleParked()                   ← regra: aloca vaga, occupied=true
-ExitEvent   → handleExit()                     ← regra: tarifa, libera vaga
-    ▼
-ParkingSessionRepository / SpotRepository      ← persistência
+ParkingSessionRepository / SpotRepository / RevenueLedgerRepository
     ▼
 HTTP 200
 ```
+
+### Comunicação cross-feature via Spring Events
+
+Saída do veículo dispara dois efeitos distintos: liberar a vaga (operacional, dono é `garage`) e contabilizar a receita (financeiro, dono é `revenue`). Em vez de `GarageService` chamar `RevenueService` diretamente, o `processExit` publica `AddToRevenueEvent(sessionId, exitTime)` e o pacote `revenue` reage por meio de `AddToRevenueListener` → `RevenueService.addRevenue(event)`.
+
+| Decisão | Justificativa |
+|---|---|
+| **Listener síncrono (`@EventListener` sem `@Async` nem `@TransactionalEventListener`)** | Roda na mesma transação do `processExit`. Se o `INSERT` no ledger falhar, todo o exit dá rollback — não existe estado "carro saiu sem receita registrada". É a opção que dispensa outbox/retry, em troca de acoplar a disponibilidade do ledger à do exit. |
+| **Evento carrega `exitTime` no payload** | `markExited` é `@Modifying` UPDATE — não atualiza o cache JPA de 1º nível. Passar `exitTime` no evento evita ler valor stale na re-fetch que o listener faz. |
+| **Listener fica em `revenue/`, evento publicado por `garage`** | Mantém o consumidor dono da reação. `garage` só conhece o tipo do evento (importa `AddToRevenueEvent`), não como a receita é contabilizada. |
+| **Idempotência no banco** | `revenue_ledger.session_id` é `UNIQUE` — qualquer republicação acidental falha no insert e o exit rolla back, sem ledger duplicado. |
 
 ## 3. Tecnologias e decisões
 
