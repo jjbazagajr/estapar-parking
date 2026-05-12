@@ -27,11 +27,11 @@ class RevenueService(
 
         val start = date.atStartOfDay().toInstant(ZoneOffset.UTC)
         val end = date.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
-        val amount = ledger.sumRevenue(sector, start, end).setScale(2, RoundingMode.HALF_EVEN)
+        val amount = ledger.sumRevenue(sector, CURRENCY, start, end).setScale(2, RoundingMode.HALF_EVEN)
 
         return RevenueResponse(
             amount = amount,
-            currency = "BRL",
+            currency = CURRENCY,
             timestamp = clock.instant(),
         )
     }
@@ -52,9 +52,14 @@ class RevenueService(
                 sessionId = event.sessionId,
                 sector = sectorName,
                 amount = amount,
+                currency = CURRENCY,
                 earnedAt = event.exitTime,
                 createdAt = clock.instant(),
             ),
         )
+    }
+
+    private companion object {
+        const val CURRENCY = "BRL"
     }
 }

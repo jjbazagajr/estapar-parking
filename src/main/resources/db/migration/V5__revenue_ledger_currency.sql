@@ -1,0 +1,2 @@
+ALTER TABLE revenue_ledger
+    ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'BRL';

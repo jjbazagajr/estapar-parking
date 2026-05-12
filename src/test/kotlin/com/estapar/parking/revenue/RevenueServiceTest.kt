@@ -48,11 +48,11 @@ class RevenueServiceTest {
 
         // when / then
         assertFailsWith<SectorNotFoundException> { service.revenueFor(anyDate, sectorA) }
-        verify(ledger, never()).sumRevenue(anyString(), anyInstantArg(), anyInstantArg())
+        verify(ledger, never()).sumRevenue(anyString(), anyString(), anyInstantArg(), anyInstantArg())
     }
 
     @Test
-    fun `given data 2025-01-01 when revenueFor then consulta sumRevenue com start 2025-01-01T00 00 UTC e end 2025-01-02T00 00 UTC`() {
+    fun `given data 2025-01-01 when revenueFor then consulta sumRevenue com sector currency BRL e janela 2025-01-01T00 00 UTC ate 2025-01-02T00 00 UTC`() {
         // given
         stubSectorExists(sectorA)
         stubSumRevenueAnyWindow(sectorA, BigDecimal.ZERO)
@@ -62,14 +62,17 @@ class RevenueServiceTest {
 
         // then
         val sectorCap = ArgumentCaptor.forClass(String::class.java)
+        val currencyCap = ArgumentCaptor.forClass(String::class.java)
         val startCap = ArgumentCaptor.forClass(Instant::class.java)
         val endCap = ArgumentCaptor.forClass(Instant::class.java)
         verify(ledger).sumRevenue(
             sectorCap.capture() ?: "",
+            currencyCap.capture() ?: "",
             startCap.capture() ?: Instant.EPOCH,
             endCap.capture() ?: Instant.EPOCH,
         )
         assertEquals(sectorA, sectorCap.value)
+        assertEquals("BRL", currencyCap.value)
         assertEquals(Instant.parse("2025-01-01T00:00:00Z"), startCap.value)
         assertEquals(Instant.parse("2025-01-02T00:00:00Z"), endCap.value)
     }
@@ -180,7 +183,7 @@ class RevenueServiceTest {
     }
 
     @Test
-    fun `given session 1h multiplier 1_000 basePrice 40_50 when addRevenue then persiste ledger com amount 40_50, sector A, earnedAt do evento e createdAt do clock`() {
+    fun `given session 1h multiplier 1_000 basePrice 40_50 when addRevenue then persiste ledger com amount 40_50, sector A, currency BRL, earnedAt do evento e createdAt do clock`() {
         // given
         stubSession(session(multiplier = BigDecimal("1.000")))
         stubSectorWithPrice("A", BigDecimal("40.50"))
@@ -193,6 +196,7 @@ class RevenueServiceTest {
         assertEquals(sessionId, captured.sessionId)
         assertEquals("A", captured.sector)
         assertEquals(0, BigDecimal("40.50").compareTo(captured.amount))
+        assertEquals("BRL", captured.currency)
         assertEquals(exitAt, captured.earnedAt)
         assertEquals(fixedInstant, captured.createdAt)
     }
@@ -236,7 +240,7 @@ class RevenueServiceTest {
     }
 
     private fun stubSumRevenueAnyWindow(sector: String, sum: BigDecimal) {
-        `when`(ledger.sumRevenue(anyString(), anyInstantArg(), anyInstantArg()))
+        `when`(ledger.sumRevenue(anyString(), anyString(), anyInstantArg(), anyInstantArg()))
             .thenReturn(sum)
     }
 
@@ -271,7 +275,7 @@ class RevenueServiceTest {
 
     private fun capturedEntry(): RevenueLedgerEntry {
         val cap = ArgumentCaptor.forClass(RevenueLedgerEntry::class.java)
-        verify(ledger).save(cap.capture() ?: RevenueLedgerEntry(sessionId = 0L, sector = "", amount = BigDecimal.ZERO, earnedAt = Instant.EPOCH, createdAt = Instant.EPOCH))
+        verify(ledger).save(cap.capture() ?: RevenueLedgerEntry(sessionId = 0L, sector = "", amount = BigDecimal.ZERO, currency = "", earnedAt = Instant.EPOCH, createdAt = Instant.EPOCH))
         return cap.value
     }
 

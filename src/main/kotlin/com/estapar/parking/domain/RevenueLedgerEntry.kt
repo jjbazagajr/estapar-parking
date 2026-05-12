@@ -26,6 +26,9 @@ class RevenueLedgerEntry(
     @Column(name = "amount", nullable = false)
     var amount: BigDecimal,
 
+    @Column(name = "currency", nullable = false, length = 3)
+    var currency: String,
+
     @Column(name = "earned_at", nullable = false)
     var earnedAt: Instant,
 
