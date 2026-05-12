@@ -19,7 +19,12 @@ Backend para gestão de uma garagem da Estapar: recebe eventos de entrada, estac
 
 ## Subindo o projeto
 
-A ordem importa: o simulador dispara o primeiro `ENTRY` ~5s após subir e **não retoma o scheduler** se o webhook estiver offline naquele momento. Suba o simulador **por último**, com a app já ouvindo em `:3003`.
+Há dois caminhos:
+
+- **Desenvolvimento (`bootRun` na IDE)** — passos **1 → 2 → 3**. A app roda no host; MySQL e simulador em containers. Útil pra debug e hot-reload.
+- **Tudo no Docker** — passo **5** (`docker compose --profile app up -d --build`). Um comando, ordem garantida pelo `depends_on`; recomendado para validar o pacote final.
+
+No fluxo de desenvolvimento a ordem importa: o simulador dispara o primeiro `ENTRY` ~5s após subir e **não retoma o scheduler** se o webhook estiver offline naquele momento. Suba o simulador **por último**, com a app já ouvindo em `:3003`.
 
 ### 1. Subir o MySQL
 
@@ -63,6 +68,32 @@ curl -s http://localhost:8081/status
 ./gradlew build       # build + testes
 ./gradlew test        # apenas testes
 ```
+
+### 5. Tudo no Docker (opcional)
+
+A app tem um `Dockerfile` multi-stage (JDK 21 → JRE 21 enxuto, usuário não-root, porta `3003`). No `docker-compose.yml`, o serviço `app` está atrás do **profile `app`** — só sobe se você optar explicitamente:
+
+```bash
+docker compose --profile app up -d --build
+```
+
+Sobe `mysql` → `garage-sim` → `app` na ordem certa (a app espera o MySQL ficar saudável e o garage-sim iniciar, porque o `GarageBootstrap` chama `GET {simulator}/garage` durante o startup). A app no container usa `mysql:3306` e `http://garage-sim:3000` via rede interna do compose — sem `host.docker.internal`.
+
+Neste modo o problema de "scheduler do simulador desistir" praticamente desaparece — a app empacotada sobe em ~3s e o primeiro `ENTRY` (5s após o garage-sim iniciar) já encontra o webhook respondendo. Se ainda assim `curl -s http://localhost:8081/status` ficar com `active_vehicles: 0`, recrie só o simulador: `docker compose restart garage-sim`.
+
+#### Build standalone
+
+Sem compose, manualmente:
+
+```bash
+docker build -t estapar-parking:dev .
+docker run --rm -p 3003:3003 \
+  -e SPRING_DATASOURCE_URL='jdbc:mysql://host.docker.internal:3306/estapar?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true' \
+  -e ESTAPAR_SIMULATOR_BASE_URL='http://host.docker.internal:8081' \
+  estapar-parking:dev
+```
+
+Os testes **não** rodam dentro do build da imagem (alguns são `@SpringBootTest` integrados que dependem do banco) — rodar testes é responsabilidade do CI antes de empacotar.
 
 ## Contexto (resumo)
 
@@ -152,6 +183,92 @@ Com a aplicação rodando:
 - Teste de **integração** (`@SpringBootTest`) é opcional — só para fluxos críticos e mediante confirmação prévia.
 
 Detalhes em [`docs/arquitetura.md`](docs/arquitetura.md) (seção 6).
+
+## Limitações conhecidas e melhorias para produção em escala
+
+Esta entrega cumpre o contrato do desafio com decisões pragmáticas para o escopo de avaliação (uma garagem, uma instância, regras de tarifa codadas, processamento síncrono). As seções abaixo inventariam o que mudaria para sustentar produção em alto volume / múltiplas garagens / SLA, **deliberadamente fora de escopo** aqui em respeito ao YAGNI.
+
+### Configuração dinâmica de tarifa
+
+Hoje as faixas de ocupação (`< 25 / 50 / 75 / 100%`) e os multiplicadores (`0,90 / 1,00 / 1,10 / 1,25`) são constantes em `PricingPolicy`. Em produção, *pricing* é decisão comercial — qualquer ajuste exige deploy.
+
+- Tabela `pricing_tiers` com faixa, multiplicador, `valid_from`/`valid_to`, escopo (`sector_id` ou global).
+- Histórico de mudanças de `base_price`, `max_capacity`, janelas e tarifas para auditoria.
+- Cache da política em memória/Redis com invalidação por evento de mudança.
+
+### Processamento assíncrono via fila
+
+Hoje cada `POST /webhook` processa síncrono dentro de uma transação. Em pico de carga, o p99 do webhook fica refém do MySQL e dos locks pessimistas em `sectors`.
+
+- Webhook vira **dispatcher**: valida payload, publica em **Kafka** particionado por `license_plate` (preserva ordem por veículo) ou **RabbitMQ** com `quorum queue`, devolve `200` imediatamente.
+- Consumidores aplicam ENTRY/PARKED/EXIT em paralelo por partição.
+- **Outbox pattern** para atomicidade entre `INSERT` da sessão e publicação na fila (sem two-phase commit).
+- Retry/dead-letter passa a ser responsabilidade do broker, não do código de aplicação.
+- Trade-off: receita em `/revenue` passa a ter consistência eventual (segundos de lag).
+
+### Cache e leitura
+
+- **Redis** para:
+  - cache de `sectors` (TTL longo — leitura a cada `parkVehicle`, mudam raramente);
+  - **contadores atômicos** (`INCR`/`DECR`) de ocupação por setor, eliminando `countBySectorAndOccupiedTrue` a cada `PARKED`/`EXIT`;
+  - dedupe de eventos por `event_id` (idempotência forte ponta-a-ponta).
+- **Read replica** dedicado ao `/revenue` — consulta agregada não compete com escrita do webhook no primary.
+- **Materialização da receita**: tabela `revenue_daily(sector, date, total)` atualizada por job batch ou trigger ao `EXIT`. Em 10M+ sessões, `SUM(amount_charged)` em tempo real fica caro mesmo com `idx_sessions_revenue`.
+
+### Particionamento e arquivamento
+
+`parking_sessions` cresce sem teto. Em produção:
+
+- Particionar por mês via *MySQL native partitioning* (`PARTITION BY RANGE(exit_time)`) ou tabela mensal separada.
+- Arquivar sessões encerradas há mais de N meses em storage frio (S3 + Glue/Athena ou MySQL archive engine).
+- Manter `revenue_daily` materializada cobrindo o histórico, mesmo após arquivar o detalhe.
+
+### Multi-tenant / múltiplas garagens
+
+O modelo atual assume **uma** garagem implícita. Para a operação real da Estapar:
+
+- `garage_id` em `sectors`, `spots`, `parking_sessions` (com FK e índices compostos).
+- Particionamento físico por `garage_id` ou shard por região.
+- **Time zone por garagem**: hoje o sistema é UTC ponta-a-ponta; relatórios brasileiros normalmente em `America/Sao_Paulo`. Cada garagem deveria carregar seu `ZoneId`.
+- **Janela overnight** (`close_hour < open_hour`, ex.: 22:00–06:00) em `Sector.isOpenAt` — citado nos riscos de `docs/features/entry.md`.
+
+### Observabilidade
+
+- Métricas (Micrometer + Prometheus): contadores por `event_type`, percentis de duração do webhook, taxa de eventos ignorados, ocupação por setor em tempo real.
+- Tracing distribuído (OpenTelemetry) — essencial quando o pipeline virar webhook → fila → consumer → banco.
+- Structured logging com `trace_id` correlacionando ENTRY → PARKED → EXIT da mesma sessão.
+- Dashboards/alarmes para: ocupação ≥ 95% por setor, taxa de `WebhookEventIgnored`, lag do consumer.
+
+### Resiliência
+
+- Circuit breaker (Resilience4j) entre app e MySQL/Redis para falhar rápido em degradação.
+- Retry com backoff exponencial no bootstrap do simulador.
+- Health checks separados: liveness (processo vivo) vs readiness (banco + cache disponíveis).
+- Graceful shutdown drenando requests em voo antes de sair (Spring Boot já cobre, validar config).
+
+### Segurança
+
+- Autenticação em `/revenue` (operadores da garagem, não público) — OAuth 2.0 ou JWT.
+- **Shared secret / mTLS no webhook** — hoje qualquer cliente externo consegue enviar eventos.
+- Rate limit por API key em endpoints de consulta (Bucket4j ou gateway).
+- Auditoria de acessos administrativos (mudança de tarifa, leitura de receita).
+
+### Qualidade de dados
+
+- Job de cleanup para **sessões zumbis** (`ENTRY` sem `PARKED` nem `EXIT` há mais de N horas) — citado em `docs/features/exit.md`.
+- Detecção de anomalias: sessões com duração > 30 dias, placa entrando/saindo em intervalos suspeitos, divergência entre `spots.occupied` agregado e sessões abertas.
+- Reconciliação periódica entre estado físico (cancela/sensor) e lógico (sessões), caso a app perca eventos.
+
+### Operação e CI/CD
+
+- Manifests K8s ou Helm chart (o `Dockerfile` da app já está pronto).
+- Pipeline CI (build + unit + integration + container build + deploy automático com canary).
+- Testes de carga (k6 ou Gatling) com SLO definido — ex.: p99 do webhook < 100ms a 1k rps.
+- Backup automatizado e procedimento de DR documentado para o MySQL.
+
+---
+
+A intenção aqui é deixar **explícito** que estas decisões foram conscientes, não esquecimentos: cada item acima é uma escolha de complexidade que não se justifica no escopo da avaliação, mas que entraria em produção real.
 
 ## Documentação canônica
 

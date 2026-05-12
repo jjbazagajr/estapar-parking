@@ -29,5 +29,24 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  app:
+    build: .
+    image: estapar-parking:dev
+    container_name: estapar-app
+    profiles: ["app"]
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      garage-sim:
+        condition: service_started
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/estapar?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&sessionVariables=innodb_lock_wait_timeout=5
+      SPRING_DATASOURCE_USERNAME: estapar
+      SPRING_DATASOURCE_PASSWORD: estapar
+      ESTAPAR_SIMULATOR_BASE_URL: http://garage-sim:3000
+    ports:
+      - "3003:3003"
+
 volumes:
   estapar-mysql-data:
