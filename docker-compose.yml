@@ -26,6 +26,8 @@ services:
       - "8081:3000"
     environment:
       CLIENT_WEBHOOK_URL: http://host.docker.internal:3003/webhook
+      ENTRY_INTERVAL_SECS: "10"
+      EXIT_INTERVAL_SECS: "300"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

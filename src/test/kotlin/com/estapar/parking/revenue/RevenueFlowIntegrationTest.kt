@@ -151,10 +151,33 @@ class RevenueFlowIntegrationTest {
 
         // when / then
         mockMvc.get("/revenue") {
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"date":"2026-05-10","sector":"INEXISTENTE"}"""
+            param("date", "2026-05-10")
+            param("sector", "INEXISTENTE")
         }.andExpect {
             status { isNotFound() }
+        }
+    }
+
+    @Test
+    fun `given query param obrigatorio ausente when GET revenue then responde 400`() {
+        // given nenhum query param e enviado
+
+        // when / then
+        mockMvc.get("/revenue").andExpect {
+            status { isBadRequest() }
+        }
+    }
+
+    @Test
+    fun `given GET revenue com body JSON e sem query params when consultado then responde 400`() {
+        // given chamada antiga com body JSON, sem query params
+
+        // when / then
+        mockMvc.get("/revenue") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"date":"2026-05-10","sector":"A"}"""
+        }.andExpect {
+            status { isBadRequest() }
         }
     }
 
@@ -186,8 +209,8 @@ class RevenueFlowIntegrationTest {
 
     private fun getRevenueBody(date: String, sector: String): String =
         mockMvc.get("/revenue") {
-            contentType = MediaType.APPLICATION_JSON
-            content = """{"date":"$date","sector":"$sector"}"""
+            param("date", date)
+            param("sector", sector)
         }.andExpect {
             status { isOk() }
         }.andReturn().response.contentAsString

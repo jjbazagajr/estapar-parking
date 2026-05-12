@@ -16,6 +16,7 @@ class WebhookDispatcher(
 
     @Async("webhookExecutor")
     fun dispatch(event: WebhookEvent) {
+        // Outbox como melhoria KAFKA | RABBIT
         try {
             when (event) {
                 is EntryEvent -> garage.registerEntry(event.licensePlate, event.entryTime)

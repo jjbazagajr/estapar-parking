@@ -54,15 +54,18 @@ Resposta: **HTTP 200** imediato (corpo vazio). O controller só desserializa o p
 
 Consulta o faturamento total de um setor em uma data.
 
-Request:
-```json
-{ "date": "2025-01-01", "sector": "A" }
+Request: dois query params obrigatórios — `date` (ISO `yyyy-MM-dd`) e `sector` (nome do setor).
+
+```
+GET /revenue?date=2025-01-01&sector=A
 ```
 
 Response:
 ```json
 { "amount": 0.00, "currency": "BRL", "timestamp": "2025-01-01T12:00:00.000Z" }
 ```
+
+Erros: `400 Bad Request` quando `date`/`sector` estão ausentes ou `date` não está em ISO. `404 Not Found` quando o setor não existe.
 
 ## Regras de negócio
 
