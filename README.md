@@ -19,71 +19,27 @@ Backend para gestão de uma garagem da Estapar: recebe eventos de entrada, estac
 
 ## Subindo o projeto
 
-Há dois caminhos:
+Dois caminhos. O modo recomendado é o Docker Compose — **um comando**, ordem garantida pelo `depends_on`, sem precisar coordenar timing entre simulador e app. O modo IDE existe para debug/hot-reload e exige a ordem `mysql → simulador → app` com a app subindo o mais rápido possível em seguida.
 
-- **Desenvolvimento (`bootRun` na IDE)** — passos **1 → 2 → 3**. A app roda no host; MySQL e simulador em containers. Útil pra debug e hot-reload.
-- **Tudo no Docker** — passo **5** (`docker compose --profile app up -d --build`). Um comando, ordem garantida pelo `depends_on`; recomendado para validar o pacote final.
-
-No fluxo de desenvolvimento a ordem importa: o simulador dispara o primeiro `ENTRY` ~5s após subir e **não retoma o scheduler** se o webhook estiver offline naquele momento. Suba o simulador **por último**, com a app já ouvindo em `:3003`.
-
-### 1. Subir o MySQL
-
-```bash
-docker compose up -d mysql
-```
-
-Sobe o container `estapar-mysql` (porta `3306`, banco `estapar`, user/pass: `estapar`/`estapar`).
-
-### 2. Rodar a aplicação
-
-```bash
-./gradlew bootRun
-```
-
-A aplicação:
-
-1. Aplica migrations Flyway (`db/migration`).
-2. Chama `GET http://localhost:8081/garage` e persiste setores/vagas (`GarageBootstrap`). Se o simulador ainda não estiver de pé, sobe mesmo assim — só haverá log de aviso e o bootstrap roda quando o simulador aparecer (ou na próxima subida da app).
-3. Fica ouvindo em **`:3003`** (webhook + REST).
-
-Aguarde a linha `Started EstaparParkingApplication` no log antes do próximo passo.
-
-### 3. Subir o simulador
-
-```bash
-docker compose up -d garage-sim
-```
-
-Sobe o container `estapar-garage-sim` (porta host `8081`), que dispara eventos para `http://host.docker.internal:3003/webhook` a cada 5s. Conferir com:
-
-```bash
-curl -s http://localhost:8081/status
-```
-
-`active_vehicles` deve crescer ao longo do tempo. Se ficar em zero, recrie o container: `docker compose restart garage-sim`.
-
-### 4. Build / testes
-
-```bash
-./gradlew build       # build + testes
-./gradlew test        # apenas testes
-```
-
-### 5. Tudo no Docker (opcional)
-
-A app tem um `Dockerfile` multi-stage (JDK 21 → JRE 21 enxuto, usuário não-root, porta `3003`). No `docker-compose.yml`, o serviço `app` está atrás do **profile `app`** — só sobe se você optar explicitamente:
+### ▶️ Modo recomendado: tudo no Docker Compose
 
 ```bash
 docker compose --profile app up -d --build
 ```
 
-Sobe `mysql` → `garage-sim` → `app` na ordem certa (a app espera o MySQL ficar saudável e o garage-sim iniciar, porque o `GarageBootstrap` chama `GET {simulator}/garage` durante o startup). A app no container usa `mysql:3306` e `http://garage-sim:3000` via rede interna do compose — sem `host.docker.internal`.
+Pronto. Sobe `mysql` → `garage-sim` → `app` na ordem certa (`depends_on: mysql healthy + garage-sim started`). A imagem multi-stage da app sobe em ~3s, então o primeiro `ENTRY` do simulador (5s após ele iniciar) já encontra o webhook respondendo — o problema de "scheduler do simulador desistir" praticamente desaparece nesse fluxo.
 
-Neste modo o problema de "scheduler do simulador desistir" praticamente desaparece — a app empacotada sobe em ~3s e o primeiro `ENTRY` (5s após o garage-sim iniciar) já encontra o webhook respondendo. Se ainda assim `curl -s http://localhost:8081/status` ficar com `active_vehicles: 0`, recrie só o simulador: `docker compose restart garage-sim`.
+A app no container usa `mysql:3306` e `http://garage-sim:3000` via rede interna do compose — sem `host.docker.internal`. As portas no host continuam sendo `3003` (app), `3306` (MySQL) e `8081` (simulador).
 
-#### Build standalone
+Sanity check após ~30s:
 
-Sem compose, manualmente:
+```bash
+curl -s http://localhost:8081/status   # active_vehicles deve crescer
+```
+
+Se ficar em zero, recrie só o simulador: `docker compose restart garage-sim`.
+
+#### Build standalone (sem compose)
 
 ```bash
 docker build -t estapar-parking:dev .
@@ -94,6 +50,47 @@ docker run --rm -p 3003:3003 \
 ```
 
 Os testes **não** rodam dentro do build da imagem (alguns são `@SpringBootTest` integrados que dependem do banco) — rodar testes é responsabilidade do CI antes de empacotar.
+
+### Modo alternativo: rodar pela IDE (`bootRun`)
+
+Útil para debug e hot-reload. **A ordem importa**: o simulador dispara o primeiro `ENTRY` ~5s após subir e não retoma o scheduler se o webhook estiver offline naquele momento. Suba **MySQL → simulador → app**, **disparando o `bootRun` imediatamente em seguida** para minimizar a janela em que o webhook poderia chegar antes da app estar pronta.
+
+#### 1. Subir o MySQL
+
+```bash
+docker compose up -d mysql
+```
+
+Container `estapar-mysql` (porta `3306`, banco `estapar`, user/pass: `estapar`/`estapar`).
+
+#### 2. Subir o simulador
+
+```bash
+docker compose up -d garage-sim
+```
+
+Container `estapar-garage-sim` (porta host `8081`), dispara eventos para `http://host.docker.internal:3003/webhook` a cada 5s.
+
+#### 3. Rodar a aplicação (imediatamente em seguida)
+
+```bash
+./gradlew bootRun
+```
+
+A aplicação:
+
+1. Aplica migrations Flyway (`db/migration`).
+2. Chama `GET http://localhost:8081/garage` e persiste setores/vagas (`GarageBootstrap`).
+3. Fica ouvindo em **`:3003`** (webhook + REST).
+
+O `bootRun` leva ~20–30s no cold start; o simulador já está disparando após 5s. Se `active_vehicles` continuar em zero após a app subir, recrie o simulador: `docker compose restart garage-sim`.
+
+### Build / testes
+
+```bash
+./gradlew build       # build + testes
+./gradlew test        # apenas testes
+```
 
 ## Contexto (resumo)
 
