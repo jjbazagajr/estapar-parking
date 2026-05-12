@@ -169,7 +169,7 @@ Já tem `RevenueRequest(date, sector)` e `RevenueResponse(amount, currency, time
 
 ## 5. Testes
 
-`src/test/kotlin/com/estapar/parking/revenue/RevenueServiceTest.kt` (novo). Padrão `given_when_then` + Mockito + `Clock.fixed`. Sem teste de controller (cobertura redundante) e sem teste de integração (acordado — query simples, coberta pelo unit).
+`src/test/kotlin/com/estapar/parking/revenue/RevenueServiceTest.kt` (novo). Padrão `given_when_then` + Mockito + `Clock.fixed`. Sem teste de controller (cobertura redundante). Teste de integração separado em arquivo próprio (ver §5.3).
 
 ### Helpers sugeridos
 
@@ -217,9 +217,19 @@ Total: **7 cenários**. Cobertura próxima de 100% das linhas do service.
 
 O controller só faz `service.revenueFor(req.date, req.sector)`. Não há mapping não-trivial, não há `@Valid`, não há `@ControllerAdvice` próprio para o pacote — o `@ResponseStatus` é declarativo. Um teste de controller validaria apenas que o Spring faz dispatch (já garantido pelo framework). Adiar até existir lógica no controller.
 
-### Por que sem teste de integração
+### 5.3. Teste de integração (`RevenueFlowIntegrationTest`)
 
-Decisão confirmada com o usuário. Critério (ver `feedback_testing_policy`): integração só em fluxos críticos e dependentes de plumbing. O `/revenue` é uma query agregada simples, sem `@Transactional` mutável, sem `@ControllerAdvice`, sem `@RequestBody` polimórfico (já coberto em `WebhookFlowIntegrationTest`). O unit cobre tudo que importa.
+Decisão revisada com o usuário: incluir integração. Justificativa: validar fim-a-fim **(a)** o filtro pela janela `[start, end)` rodando contra um SQL real (H2 modo MySQL) e não contra a JPQL mockada; **(b)** a serialização da resposta (`amount` com escala 2 no JSON, `timestamp` em ISO-8601); **(c)** o mapeamento de `SectorNotFoundException` → 404 pelo `@ResponseStatus`.
+
+`src/test/kotlin/com/estapar/parking/revenue/RevenueFlowIntegrationTest.kt`. Setup idêntico ao `WebhookFlowIntegrationTest` (H2 modo MySQL via `@TestPropertySource`, Flyway off, bootstrap off). Sessões são criadas direto via `ParkingSessionRepository` (não via webhook) para não acoplar `/revenue` ao ciclo `ENTRY → PARKED → EXIT`.
+
+Assertions usam `JsonPath` (Jayway, já no `spring-boot-starter-test`) — evita dependência do `jackson-module-kotlin`, que **não está no classpath** do projeto.
+
+Cenários (3):
+
+- `given sessoes encerradas no dia em setores diferentes when GET revenue then soma apenas o setor e dia consultados` — popula 4 sessões cobrindo fronteiras `00:00:00Z` do dia consultado, `23:59:59Z` do mesmo dia, outro setor no mesmo dia, e `00:00:00Z` do dia seguinte. Confirma que apenas as duas primeiras entram no agregado.
+- `given nenhuma sessao encerrada no dia consultado when GET revenue then retorna 0_00 com currency BRL` — sessão existe num dia adjacente; consulta retorna `0.00` (com escala 2) e currency BRL.
+- `given setor inexistente when GET revenue then responde 404` — confirma o `@ResponseStatus(NOT_FOUND)` do `SectorNotFoundException` chega no cliente.
 
 ## 6. Riscos e pegadinhas
 
@@ -242,7 +252,7 @@ Decisão confirmada com o usuário. Critério (ver `feedback_testing_policy`): i
 - **Endpoint de receita por **período** (range de datas)**: contrato é por dia único. PR separada se virar requisito.
 - **Endpoint de receita por **placa** ou por **vaga****: fora do contrato.
 - **Mudança do contrato de `GET` para `POST`**: discussão em aberto, não decidir aqui.
-- **Teste de integração**: confirmado fora.
+- **Validar migration Flyway de ponta-a-ponta** no `/revenue`: o integration test roda em H2 modo MySQL, não exercita o SQL bruto da V1. Cobrir isso exigiria Testcontainers — segue fora.
 
 ## 8. Checklist de execução
 
@@ -252,8 +262,9 @@ Decisão confirmada com o usuário. Critério (ver `feedback_testing_policy`): i
    - remover o default `Clock = Clock.systemUTC()` (passa a ser obrigatório);
    - implementar `revenueFor` na ordem: validar setor → calcular janela UTC → somar → montar response com `setScale(2, HALF_EVEN)` e `clock.instant()`.
 3. Criar `revenue/RevenueServiceTest.kt` com os **7 cenários** da §5.
-4. `./gradlew test` verde.
-5. Subir `docker compose up -d` + `./gradlew bootRun`. Após pelo menos um ciclo completo `ENTRY → PARKED → EXIT`:
+4. Criar `revenue/RevenueFlowIntegrationTest.kt` com os **3 cenários** da §5.3 (setup H2 modo MySQL, assertions via `JsonPath`).
+5. `./gradlew test` verde.
+6. Subir `docker compose up -d` + `./gradlew bootRun`. Após pelo menos um ciclo completo `ENTRY → PARKED → EXIT`:
    - `curl -s -X GET http://localhost:3003/revenue -H 'Content-Type: application/json' -d '{"date":"2026-05-11","sector":"A"}'` → `200` com `amount` > 0.
    - `curl ... -d '{"date":"2026-05-11","sector":"INEXISTENTE"}'` → `404`.
    - `curl ... -d '{"date":"1999-01-01","sector":"A"}'` → `200` com `amount: 0.00`.
