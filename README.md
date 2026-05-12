@@ -19,18 +19,15 @@ Backend para gestão de uma garagem da Estapar: recebe eventos de entrada, estac
 
 ## Subindo o projeto
 
-### 1. Subir MySQL e simulador
+A ordem importa: o simulador dispara o primeiro `ENTRY` ~5s após subir e **não retoma o scheduler** se o webhook estiver offline naquele momento. Suba o simulador **por último**, com a app já ouvindo em `:3003`.
+
+### 1. Subir o MySQL
 
 ```bash
-docker compose up -d
+docker compose up -d mysql
 ```
 
-Sobe dois containers:
-
-| Serviço | Porta host | Descrição |
-|---|---|---|
-| `estapar-mysql` | `3306` | MySQL 8.4 com banco `estapar` (user/pass: `estapar`/`estapar`) |
-| `estapar-garage-sim` | `8081` | Simulador que dispara eventos para `http://host.docker.internal:3003/webhook` |
+Sobe o container `estapar-mysql` (porta `3306`, banco `estapar`, user/pass: `estapar`/`estapar`).
 
 ### 2. Rodar a aplicação
 
@@ -41,12 +38,26 @@ Sobe dois containers:
 A aplicação:
 
 1. Aplica migrations Flyway (`db/migration`).
-2. Chama `GET http://localhost:8081/garage` e persiste setores/vagas (`GarageBootstrap`).
+2. Chama `GET http://localhost:8081/garage` e persiste setores/vagas (`GarageBootstrap`). Se o simulador ainda não estiver de pé, sobe mesmo assim — só haverá log de aviso e o bootstrap roda quando o simulador aparecer (ou na próxima subida da app).
 3. Fica ouvindo em **`:3003`** (webhook + REST).
 
-Se o simulador não estiver de pé, a app sobe mesmo assim — só haverá log de aviso e o webhook falhará até a configuração existir.
+Aguarde a linha `Started EstaparParkingApplication` no log antes do próximo passo.
 
-### 3. Build / testes
+### 3. Subir o simulador
+
+```bash
+docker compose up -d garage-sim
+```
+
+Sobe o container `estapar-garage-sim` (porta host `8081`), que dispara eventos para `http://host.docker.internal:3003/webhook` a cada 5s. Conferir com:
+
+```bash
+curl -s http://localhost:8081/status
+```
+
+`active_vehicles` deve crescer ao longo do tempo. Se ficar em zero, recrie o container: `docker compose restart garage-sim`.
+
+### 4. Build / testes
 
 ```bash
 ./gradlew build       # build + testes
