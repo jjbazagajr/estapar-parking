@@ -1,5 +1,6 @@
 package com.estapar.parking.revenue
 
+import com.estapar.parking.config.SyncAsyncTestConfig
 import com.estapar.parking.domain.Sector
 import com.estapar.parking.domain.Spot
 import com.estapar.parking.ledger.RevenueLedgerRepository
@@ -12,7 +13,9 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
+import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
+import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.context.TestPropertySource
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
@@ -23,6 +26,8 @@ import kotlin.test.assertNotNull
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
+@Import(SyncAsyncTestConfig::class)
+@ActiveProfiles("sync-async")
 @TestPropertySource(
     properties = [
         "spring.datasource.url=jdbc:h2:mem:revenue-it;MODE=MySQL;DB_CLOSE_DELAY=-1",

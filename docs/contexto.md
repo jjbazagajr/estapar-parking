@@ -48,7 +48,7 @@ Recebe três tipos de evento, discriminados pelo campo `event_type`:
 | `PARKED` | `license_plate`, `lat`, `lng` | Veículo estacionou em uma vaga específica |
 | `EXIT`  | `license_plate`, `exit_time`  | Veículo passou pela cancela de saída |
 
-Resposta: **HTTP 200** (corpo vazio).
+Resposta: **HTTP 200** imediato (corpo vazio). O controller só desserializa o payload e despacha o processamento para `WebhookDispatcher` (`@Async`); regras de domínio rodam fora da request, então o simulador nunca espera nossa lógica. Payload malformado é o único 4xx — `400 Bad Request` pelo handler default do Spring.
 
 ### `GET /revenue`
 

@@ -117,15 +117,19 @@ Regras-chave (detalhes em [`docs/contexto.md`](docs/contexto.md)):
 ```
 com.estapar.parking
 ├── EstaparParkingApplication.kt
-├── config/        infra (RestClient, Clock, properties, OpenAPI)
-├── domain/        entidades JPA + repositórios + services de contexto + exceções de domínio
+├── config/        infra (RestClient, Clock, AsyncConfig, properties, OpenAPI)
+├── domain/        entidades JPA + DomainExceptions (regras de domínio)
+├── session/       SessionService + ParkingSessionRepository
+├── spot/          SpotService + SpotRepository
+├── sector/        SectorService + SectorRepository
+├── ledger/        RevenueLedgerRepository (sem service, YAGNI)
 ├── simulator/     cliente HTTP do simulador + bootstrap inicial
 ├── garage/        orquestra ENTRY/PARKED/EXIT + PricingPolicy
-├── webhook/       POST /webhook (transporte; delega ao garage)
+├── webhook/       POST /webhook (controller fino) + WebhookDispatcher (@Async)
 └── revenue/       GET /revenue + AddToRevenueListener (consome evento do EXIT)
 ```
 
-Feature services (`GarageService`, `RevenueService`, `GarageBootstrap`) **não tocam repositórios** — falam apenas com os domain services em `domain/` (`SessionService`, `SpotService`, `SectorService`). Regras de transição (`session.park()`, `spot.occupy()`, etc.) vivem nas entidades; concorrência é controlada por `@Version` em `ParkingSession`/`Spot`/`Sector` (optimistic locking) — corridas reais são traduzidas em exceções de domínio pelos services. A saída de um veículo dispara `AddToRevenueEvent` publicado por `GarageService.processExit` e consumido por `RevenueService.addRevenue` (listener síncrono na mesma transação), que calcula a tarifa via `PricingPolicy` e grava um lançamento em `revenue_ledger`. Detalhes em [`docs/arquitetura.md`](docs/arquitetura.md#domain-services-e-regra-de-estado-no-agregado).
+`POST /webhook` é assíncrono: `WebhookController` só desserializa o payload (formato inválido → 400 default do Spring) e despacha para `WebhookDispatcher.dispatch(event)`, que roda em `webhookExecutor` (pool 4/16/100 com `CallerRunsPolicy`). Cliente recebe `200` antes de qualquer regra rodar. Feature services (`GarageService`, `RevenueService`, `GarageBootstrap`) **não tocam repositórios** — falam apenas com os domain services (`SessionService`, `SpotService`, `SectorService`). Regras de transição (`session.park()`, `spot.occupy()`, etc.) vivem nas entidades; concorrência é controlada por `@Version` (optimistic locking) — corridas reais são traduzidas em exceções de domínio pelos services. A saída de um veículo dispara `AddToRevenueEvent` consumido por `RevenueService.addRevenue` (listener síncrono na mesma transação do exit, que calcula a tarifa via `PricingPolicy` e grava em `revenue_ledger`). Detalhes em [`docs/arquitetura.md`](docs/arquitetura.md#webhook-async-via-webhookdispatcher) e [seção dos domain services](docs/arquitetura.md#domain-services-e-regra-de-estado-no-agregado).
 
 | Camada | Responsabilidade |
 |---|---|
@@ -150,7 +154,7 @@ Discriminado por `event_type`:
 | `PARKED` | `license_plate`, `lat`, `lng` | Veículo estacionou em uma vaga |
 | `EXIT` | `license_plate`, `exit_time` | Veículo saiu (calcula valor) |
 
-Resposta: **`200 OK` sempre** com corpo vazio. Eventos inválidos (placa sem sessão aberta, vaga já ocupada, replay de `ENTRY`, etc.) são logados e ignorados — o simulador nunca recebe erro pelo webhook.
+Resposta: **`200 OK` imediato** com corpo vazio — o controller só desserializa o payload e despacha o processamento async. Eventos inválidos por regra de domínio (placa sem sessão aberta, vaga já ocupada, replay de `ENTRY`, etc.) são logados no dispatcher e ignorados; o simulador nunca recebe erro pelo webhook. Payload malformado (JSON inválido ou `event_type` desconhecido) é o único caso de erro síncrono — vira `400 Bad Request` pelo handler default do Spring.
 
 ### `GET /revenue`
 
@@ -195,13 +199,15 @@ Hoje as faixas de ocupação (`< 25 / 50 / 75 / 100%`) e os multiplicadores (`0,
 - Histórico de mudanças de `base_price`, `max_capacity`, janelas e tarifas para auditoria.
 - Cache da política em memória/Redis com invalidação por evento de mudança.
 
-### Processamento assíncrono via fila
+### Processamento assíncrono via fila durável
 
-Hoje cada `POST /webhook` processa síncrono dentro de uma transação. Em pico de carga, o p99 do webhook fica refém do MySQL e dos locks pessimistas em `sectors`.
+`POST /webhook` já é assíncrono **dentro do processo**: `WebhookController` devolve `200` imediato e `WebhookDispatcher` (`@Async`) processa em pool dedicado (`webhookExecutor`, 4/16/100 com `CallerRunsPolicy`). Isso resolve o p99 sob carga moderada de uma instância, mas tem um buraco de durabilidade: se a app crashar entre o `200` e a execução da task no pool, o evento se perde — o simulador emite uma vez, sem retry.
 
-- Webhook vira **dispatcher**: valida payload, publica em **Kafka** particionado por `license_plate` (preserva ordem por veículo) ou **RabbitMQ** com `quorum queue`, devolve `200` imediatamente.
+Caminho de produção:
+
+- Trocar o `ThreadPoolTaskExecutor` por **Kafka** particionado por `license_plate` (preserva ordem por veículo) ou **RabbitMQ** com `quorum queue`. Webhook ainda devolve `200` imediato, mas só após o `produce` (que é durável).
 - Consumidores aplicam ENTRY/PARKED/EXIT em paralelo por partição.
-- **Outbox pattern** para atomicidade entre `INSERT` da sessão e publicação na fila (sem two-phase commit).
+- **Outbox pattern** opcional caso queiramos ainda mais atomicidade entre desserialização do payload e o `produce` (HTTP layer + DB outbox, sem two-phase commit).
 - Retry/dead-letter passa a ser responsabilidade do broker, não do código de aplicação.
 - Trade-off: receita em `/revenue` passa a ter consistência eventual (segundos de lag).
 

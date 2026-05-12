@@ -1,13 +1,8 @@
 package com.estapar.parking.webhook
 
-import com.estapar.parking.domain.SessionAlreadyOpenException
-import com.estapar.parking.domain.SessionNotFoundException
-import com.estapar.parking.garage.GarageService
 import org.junit.jupiter.api.Test
-import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verify
-import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import java.time.LocalDateTime
 import kotlin.test.assertEquals
@@ -15,64 +10,49 @@ import kotlin.test.assertNull
 
 class WebhookControllerTest {
 
-    private val garage: GarageService = mock(GarageService::class.java)
-    private val controller = WebhookController(garage)
+    private val dispatcher: WebhookDispatcher = mock(WebhookDispatcher::class.java)
+    private val controller = WebhookController(dispatcher)
 
     private val plate = "ABC1D23"
     private val entryTime = LocalDateTime.of(2026, 5, 10, 12, 0)
 
     @Test
-    fun `given ENTRY valido when receive then chama service e responde 200 sem body`() {
-        // given (mock retorna Unit por default)
-
-        // when
-        val response = controller.receive(EntryEvent(plate, entryTime))
-
-        // then
-        assertEquals(HttpStatus.OK, response.statusCode)
-        assertNull(response.body)
-        verify(garage).registerEntry(plate, entryTime)
-    }
-
-    @Test
-    fun `given service lanca DomainRuleViolation when receive then responde 200 e nao propaga`() {
+    fun `given ENTRY valido when receive then despacha evento e responde 200 sem body`() {
         // given
-        doThrow(SessionAlreadyOpenException(plate))
-            .`when`(garage).registerEntry(plate, entryTime)
+        val event = EntryEvent(plate, entryTime)
 
         // when
-        val response = controller.receive(EntryEvent(plate, entryTime))
+        val response = controller.receive(event)
 
         // then
         assertEquals(HttpStatus.OK, response.statusCode)
         assertNull(response.body)
+        verify(dispatcher).dispatch(event)
     }
 
     @Test
-    fun `given service lanca DataIntegrityViolationException when receive then responde 200 e nao propaga`() {
-        // given (corrida na constraint uk_sessions_open_plate ou uk_sessions_entry_event)
-        doThrow(DataIntegrityViolationException("uk_sessions_open_plate"))
-            .`when`(garage).registerEntry(plate, entryTime)
+    fun `given PARKED valido when receive then despacha evento e responde 200`() {
+        // given
+        val event = ParkedEvent(plate, lat = -23.5, lng = -46.6)
 
         // when
-        val response = controller.receive(EntryEvent(plate, entryTime))
+        val response = controller.receive(event)
 
         // then
         assertEquals(HttpStatus.OK, response.statusCode)
-        assertNull(response.body)
+        verify(dispatcher).dispatch(event)
     }
 
     @Test
-    fun `given PARKED para placa sem sessao when receive then responde 200 e nao propaga`() {
-        // given evento PARKED chega antes de qualquer ENTRY
-        doThrow(SessionNotFoundException(plate))
-            .`when`(garage).parkVehicle(plate, 0.0, 0.0)
+    fun `given EXIT valido when receive then despacha evento e responde 200`() {
+        // given
+        val event = ExitEvent(plate, exitTime = entryTime.plusHours(1))
 
         // when
-        val response = controller.receive(ParkedEvent(plate, 0.0, 0.0))
+        val response = controller.receive(event)
 
         // then
         assertEquals(HttpStatus.OK, response.statusCode)
-        assertNull(response.body)
+        verify(dispatcher).dispatch(event)
     }
 }

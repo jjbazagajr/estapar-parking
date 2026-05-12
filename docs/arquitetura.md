@@ -44,8 +44,14 @@ com.estapar.parking
 ├── simulator/                     ← cliente HTTP do simulador + bootstrap (consome SectorService / SpotService)
 ├── garage/                        ← orquestra ENTRY/PARKED/EXIT + PricingPolicy
 ├── webhook/                       ← endpoint POST (transporte; delega ao garage)
-└── revenue/                       ← endpoint GET + listener de AddToRevenueEvent (consome SessionService / SectorService)
+├── revenue/                       ← endpoint GET + listener de AddToRevenueEvent (consome SessionService / SectorService)
+├── session/                       ← SessionService + ParkingSessionRepository
+├── spot/                          ← SpotService + SpotRepository
+├── sector/                        ← SectorService + SectorRepository
+└── ledger/                        ← RevenueLedgerRepository (sem service, decisão YAGNI)
 ```
+
+`webhook/` contém o `WebhookController` (fino, só desserialização) e o `WebhookDispatcher` (`@Async`, faz o `when` por tipo de evento e chama `GarageService`).
 
 **Por que package-by-feature?**
 - Mudanças num domínio ficam contidas num pacote.
@@ -57,7 +63,8 @@ com.estapar.parking
 
 | Camada | Responsabilidade | Regras |
 |---|---|---|
-| **Controller** (`*Controller.kt`) | HTTP I/O: bind de DTO, validação, status code | **Nunca** contém regra de negócio. Só orquestra: recebe → chama feature service → devolve |
+| **Controller** (`*Controller.kt`) | HTTP I/O: bind de DTO, status code | **Nunca** contém regra de negócio. Em fronteiras assíncronas (webhook) só desserializa e despacha; payload válido sempre vira 200 |
+| **Dispatcher async** (`WebhookDispatcher`) | Mudança de contexto sync→async no boundary de webhook + tratamento de exceções de domínio (log) | `@Async` em método de bean separado para o proxy AOP funcionar. Não fica no controller (self-invocation não é interceptada) |
 | **Feature service** (`GarageService`, `RevenueService`) | Orquestração de regras cross-contexto + `@Transactional` | Não toca repositórios. Conversa com services de contexto e publica/consome eventos |
 | **Domain service** (`SessionService`, `SpotService`, `SectorService`) | Operações de um único agregado: finders, salvamentos, transições de estado | Encapsula o repo. Chama métodos das entidades; traduz `ObjectOptimisticLockingFailureException` em exceção de domínio |
 | **Entidade JPA** | Estado + invariantes do agregado | Regras de transição (`park()`, `exit()`, `occupy()`, …) vivem aqui. Validações lançam exceções de `DomainExceptions.kt` |
@@ -70,7 +77,17 @@ com.estapar.parking
 HTTP request
     ▼
 WebhookController.receive(WebhookEvent)        ← bind Jackson, sealed type discriminado por event_type
+    │                                            (erro de desserializacao -> 400 default do Spring)
     ▼
+WebhookDispatcher.dispatch(event)              ← @Async("webhookExecutor"), retorna imediatamente
+    │
+    ▼
+HTTP 200          ← controller devolve antes do processamento, simulador nao espera
+
+  ════════════════════════════════════════════════
+  (depois, na thread do webhookExecutor:)
+  ════════════════════════════════════════════════
+
 GarageService.{registerEntry|parkVehicle|processExit}   ← @Transactional, orquestra
     │
     ├─ EntryEvent  → registerEntry()
@@ -96,9 +113,28 @@ GarageService.{registerEntry|parkVehicle|processExit}   ← @Transactional, orqu
                   ├─ sessionService.findById(event.sessionId)
                   ├─ sectorService.findByName(session.sector)
                   └─ ledger.save(...)         ← calcula via PricingPolicy, grava revenue_ledger
-    ▼
-HTTP 200
+
+Excecoes de dominio (DomainRuleViolation) e DataIntegrityViolationException sao capturadas pelo dispatcher e logadas — nao tem como propagar para o cliente, que ja recebeu 200.
 ```
+
+### Webhook async via `WebhookDispatcher`
+
+Webhook é fronteira de integração com produtor externo (o simulador). Antes, o controller processava sync — `POST /webhook` segurava o simulador esperando todo o ciclo `ENTRY/PARKED/EXIT → DB → publishEvent → ledger` terminar. Inflar a regra do nosso lado iria atrapalhar o serviço de terceiros, padrão antagônico à recomendação de qualquer integrador (Stripe, GitHub, etc.: aceita payload, devolve 200 rápido, processa em background).
+
+A separação que adotamos:
+
+| Componente | Responsabilidade |
+|---|---|
+| `WebhookController` | Só desserialização e despacho. Sem try/catch — payload malformado vira 400 pelo handler padrão do Spring. Payload válido vira 200 imediato. |
+| `WebhookDispatcher` | `@Async("webhookExecutor")`, faz o `when` por tipo de evento e chama `GarageService`. Captura `DomainRuleViolation` e `DataIntegrityViolationException` no log (não tem como propagar para o cliente que já recebeu 200). |
+| `webhookExecutor` (em `AsyncConfig`) | `ThreadPoolTaskExecutor` com `core=4`, `max=16`, `queue=100`, `CallerRunsPolicy` em overflow — degrada para sync no caller quando o pool satura, sem perder eventos por rejeição silenciosa. |
+
+| Decisão | Justificativa |
+|---|---|
+| **`@Async` em vez de fila durável** | Suficiente pro escopo de uma instância. Trade-off explícito: se a app crashar entre o `200` e a execução da task, o evento se perde (o simulador emite uma vez, sem retry). Caminho para produção real (outbox / Kafka / Rabbit) listado em `README.md` "Limitações conhecidas". |
+| **Qualifier nomeado (`@Async("webhookExecutor")`)** | Em integration tests, o executor é trocado por `SyncTaskExecutor` via `@Profile("sync-async")`. Sem qualifier, a resolução por tipo bate em ambiguidade com `applicationTaskExecutor` auto-configurado pelo Boot. |
+| **`CallerRunsPolicy`** | Quando `corePool` + `queue` saturam, o pool rejeitaria por default — eventos perdidos sem trace. Com `CallerRunsPolicy`, a task roda no thread do dispatcher (o request thread), efetivamente aplicando backpressure no simulador. |
+| **Integration tests com `@ActiveProfiles("sync-async")`** | `SyncAsyncTestConfig` substitui o executor por `SyncTaskExecutor` (executa na thread chamadora). Asserts após `mockMvc.post` continuam determinísticos — o estado já está commitado quando a resposta retorna. Sem isso, precisaríamos de polling ou `Thread.sleep`, ambos vedados pelos princípios de teste. |
 
 ### Comunicação cross-feature via Spring Events
 
