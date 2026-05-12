@@ -1,11 +1,11 @@
 package com.estapar.parking.revenue
 
-import com.estapar.parking.domain.ParkingSessionRepository
-import com.estapar.parking.domain.RevenueLedgerRepository
 import com.estapar.parking.domain.Sector
-import com.estapar.parking.domain.SectorRepository
 import com.estapar.parking.domain.Spot
-import com.estapar.parking.domain.SpotRepository
+import com.estapar.parking.ledger.RevenueLedgerRepository
+import com.estapar.parking.sector.SectorRepository
+import com.estapar.parking.session.ParkingSessionRepository
+import com.estapar.parking.spot.SpotRepository
 import com.jayway.jsonpath.JsonPath
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test

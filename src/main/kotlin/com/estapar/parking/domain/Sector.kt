@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import jakarta.persistence.Version
 import java.math.BigDecimal
 import java.time.LocalTime
 
@@ -34,11 +35,29 @@ class Sector(
 
     @Column(name = "duration_limit_minutes")
     var durationLimitMinutes: Int? = null,
+
+    @Version
+    @Column(name = "version", nullable = false)
+    var version: Long = 0,
 ) {
 
     fun isOpenAt(time: LocalTime): Boolean {
         val open = openHour ?: return true
         val close = closeHour ?: return true
         return time in open..close
+    }
+
+    fun syncWith(
+        basePrice: BigDecimal,
+        maxCapacity: Int,
+        openHour: LocalTime?,
+        closeHour: LocalTime?,
+        durationLimitMinutes: Int?,
+    ) {
+        this.basePrice = basePrice
+        this.maxCapacity = maxCapacity
+        this.openHour = openHour
+        this.closeHour = closeHour
+        this.durationLimitMinutes = durationLimitMinutes
     }
 }

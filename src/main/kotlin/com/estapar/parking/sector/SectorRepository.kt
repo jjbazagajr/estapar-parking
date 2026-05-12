@@ -1,5 +1,6 @@
-package com.estapar.parking.domain
+package com.estapar.parking.sector
 
+import com.estapar.parking.domain.Sector
 import jakarta.persistence.LockModeType
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock

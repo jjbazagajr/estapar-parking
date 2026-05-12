@@ -1,10 +1,10 @@
 package com.estapar.parking.webhook
 
-import com.estapar.parking.domain.ParkingSessionRepository
 import com.estapar.parking.domain.Sector
-import com.estapar.parking.domain.SectorRepository
 import com.estapar.parking.domain.Spot
-import com.estapar.parking.domain.SpotRepository
+import com.estapar.parking.sector.SectorRepository
+import com.estapar.parking.session.ParkingSessionRepository
+import com.estapar.parking.spot.SpotRepository
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired

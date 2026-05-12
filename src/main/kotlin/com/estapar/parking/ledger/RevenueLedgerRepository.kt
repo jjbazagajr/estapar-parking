@@ -1,5 +1,6 @@
-package com.estapar.parking.domain
+package com.estapar.parking.ledger
 
+import com.estapar.parking.domain.RevenueLedgerEntry
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param

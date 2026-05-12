@@ -2,9 +2,9 @@ package com.estapar.parking.simulator
 
 import com.estapar.parking.config.SimulatorProperties
 import com.estapar.parking.domain.Sector
-import com.estapar.parking.domain.SectorRepository
 import com.estapar.parking.domain.Spot
-import com.estapar.parking.domain.SpotRepository
+import com.estapar.parking.sector.SectorService
+import com.estapar.parking.spot.SpotService
 import org.slf4j.LoggerFactory
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
@@ -18,8 +18,8 @@ import java.time.format.DateTimeParseException
 @Component
 class GarageBootstrap(
     private val simulatorRestClient: RestClient,
-    private val sectorRepository: SectorRepository,
-    private val spotRepository: SpotRepository,
+    private val sectorService: SectorService,
+    private val spotService: SpotService,
     private val properties: SimulatorProperties,
 ) : ApplicationRunner {
 
@@ -57,39 +57,30 @@ class GarageBootstrap(
     }
 
     private fun upsertSector(dto: SectorDto) {
-        val sector = sectorRepository.findByName(dto.sector) ?: Sector(
+        val sector = sectorService.findByName(dto.sector) ?: Sector(
             name = dto.sector,
             basePrice = dto.basePrice,
             maxCapacity = dto.maxCapacity,
         )
-        sector.applyFrom(dto)
-        sectorRepository.save(sector)
+        sector.syncWith(
+            basePrice = dto.basePrice,
+            maxCapacity = dto.maxCapacity,
+            openHour = parseTime(dto.openHour),
+            closeHour = parseTime(dto.closeHour),
+            durationLimitMinutes = dto.durationLimitMinutes,
+        )
+        sectorService.save(sector)
     }
 
     private fun upsertSpot(dto: SpotDto) {
-        val spot = spotRepository.findById(dto.id).orElse(null) ?: Spot(
+        val spot = spotService.findById(dto.id) ?: Spot(
             id = dto.id,
             sector = dto.sector,
             lat = dto.lat,
             lng = dto.lng,
         )
-        spot.applyFrom(dto)
-        spotRepository.save(spot)
-    }
-
-    private fun Sector.applyFrom(dto: SectorDto) {
-        basePrice = dto.basePrice
-        maxCapacity = dto.maxCapacity
-        openHour = parseTime(dto.openHour)
-        closeHour = parseTime(dto.closeHour)
-        durationLimitMinutes = dto.durationLimitMinutes
-    }
-
-    private fun Spot.applyFrom(dto: SpotDto) {
-        sector = dto.sector
-        lat = dto.lat
-        lng = dto.lng
-        occupied = dto.occupied
+        spot.syncWith(sector = dto.sector, lat = dto.lat, lng = dto.lng, occupied = dto.occupied)
+        spotService.save(spot)
     }
 
     private fun parseTime(value: String?): LocalTime? {

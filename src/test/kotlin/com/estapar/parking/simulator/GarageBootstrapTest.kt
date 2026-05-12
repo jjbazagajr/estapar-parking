@@ -2,9 +2,9 @@ package com.estapar.parking.simulator
 
 import com.estapar.parking.config.SimulatorProperties
 import com.estapar.parking.domain.Sector
-import com.estapar.parking.domain.SectorRepository
 import com.estapar.parking.domain.Spot
-import com.estapar.parking.domain.SpotRepository
+import com.estapar.parking.sector.SectorService
+import com.estapar.parking.spot.SpotService
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
 import org.mockito.Mockito.`when`
@@ -14,20 +14,20 @@ import org.mockito.Mockito.verifyNoMoreInteractions
 import org.springframework.web.client.RestClient
 import java.math.BigDecimal
 import java.time.LocalTime
-import java.util.Optional
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class GarageBootstrapTest {
 
-    private val sectorRepository: SectorRepository = mock(SectorRepository::class.java)
-    private val spotRepository: SpotRepository = mock(SpotRepository::class.java)
+    private val sectorService: SectorService = mock(SectorService::class.java)
+    private val spotService: SpotService = mock(SpotService::class.java)
     private val restClient: RestClient = mock(RestClient::class.java)
     private val properties = SimulatorProperties(baseUrl = "http://test", bootstrapEnabled = true)
-    private val bootstrap = GarageBootstrap(restClient, sectorRepository, spotRepository, properties)
+    private val bootstrap = GarageBootstrap(restClient, sectorService, spotService, properties)
 
     @Test
     fun `given sector ausente quando persist entao insere novo registro`() {
+        // given
         val dto = SectorDto(
             sector = "A",
             basePrice = BigDecimal("50.00"),
@@ -36,12 +36,14 @@ class GarageBootstrapTest {
             closeHour = "23:59",
             durationLimitMinutes = 1440,
         )
-        `when`(sectorRepository.findByName("A")).thenReturn(null)
+        `when`(sectorService.findByName("A")).thenReturn(null)
 
+        // when
         bootstrap.persist(GarageResponse(garage = listOf(dto), spots = emptyList()))
 
+        // then
         val captor = ArgumentCaptor.forClass(Sector::class.java)
-        verify(sectorRepository).save(captor.capture())
+        verify(sectorService).save(captor.capture() ?: Sector(name = "", basePrice = BigDecimal.ZERO, maxCapacity = 0))
         val saved = captor.value
         assertNull(saved.id)
         assertEquals("A", saved.name)
@@ -54,6 +56,7 @@ class GarageBootstrapTest {
 
     @Test
     fun `given sector ja cadastrado quando persist entao atualiza preservando id`() {
+        // given
         val existing = Sector(
             id = 7L,
             name = "A",
@@ -66,12 +69,14 @@ class GarageBootstrapTest {
             maxCapacity = 25,
             openHour = "08:00",
         )
-        `when`(sectorRepository.findByName("A")).thenReturn(existing)
+        `when`(sectorService.findByName("A")).thenReturn(existing)
 
+        // when
         bootstrap.persist(GarageResponse(garage = listOf(dto), spots = emptyList()))
 
+        // then
         val captor = ArgumentCaptor.forClass(Sector::class.java)
-        verify(sectorRepository).save(captor.capture())
+        verify(sectorService).save(captor.capture() ?: Sector(name = "", basePrice = BigDecimal.ZERO, maxCapacity = 0))
         val saved = captor.value
         assertEquals(7L, saved.id)
         assertEquals("A", saved.name)
@@ -82,6 +87,7 @@ class GarageBootstrapTest {
 
     @Test
     fun `given spot ausente quando persist entao insere com id do simulador`() {
+        // given
         val dto = SpotDto(
             id = 42L,
             sector = "A",
@@ -89,12 +95,14 @@ class GarageBootstrapTest {
             lng = -46.6,
             occupied = false,
         )
-        `when`(spotRepository.findById(42L)).thenReturn(Optional.empty())
+        `when`(spotService.findById(42L)).thenReturn(null)
 
+        // when
         bootstrap.persist(GarageResponse(garage = emptyList(), spots = listOf(dto)))
 
+        // then
         val captor = ArgumentCaptor.forClass(Spot::class.java)
-        verify(spotRepository).save(captor.capture())
+        verify(spotService).save(captor.capture() ?: Spot(id = 0L, sector = "", lat = 0.0, lng = 0.0))
         val saved = captor.value
         assertEquals(42L, saved.id)
         assertEquals("A", saved.sector)
@@ -105,6 +113,7 @@ class GarageBootstrapTest {
 
     @Test
     fun `given spot ja cadastrado quando persist entao atualiza sem chamar saveAll`() {
+        // given
         val existing = Spot(
             id = 42L,
             sector = "A",
@@ -119,14 +128,16 @@ class GarageBootstrapTest {
             lng = -20.0,
             occupied = false,
         )
-        `when`(spotRepository.findById(42L)).thenReturn(Optional.of(existing))
+        `when`(spotService.findById(42L)).thenReturn(existing)
 
+        // when
         bootstrap.persist(GarageResponse(garage = emptyList(), spots = listOf(dto)))
 
+        // then
         val captor = ArgumentCaptor.forClass(Spot::class.java)
-        verify(spotRepository).findById(42L)
-        verify(spotRepository).save(captor.capture())
-        verifyNoMoreInteractions(spotRepository)
+        verify(spotService).findById(42L)
+        verify(spotService).save(captor.capture() ?: Spot(id = 0L, sector = "", lat = 0.0, lng = 0.0))
+        verifyNoMoreInteractions(spotService)
         val saved = captor.value
         assertEquals(42L, saved.id)
         assertEquals("B", saved.sector)

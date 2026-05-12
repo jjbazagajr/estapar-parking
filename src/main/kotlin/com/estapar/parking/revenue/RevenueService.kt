@@ -1,11 +1,11 @@
 package com.estapar.parking.revenue
 
-import com.estapar.parking.domain.ParkingSessionRepository
 import com.estapar.parking.domain.RevenueLedgerEntry
-import com.estapar.parking.domain.RevenueLedgerRepository
-import com.estapar.parking.domain.SectorRepository
+import com.estapar.parking.domain.SectorMissingException
 import com.estapar.parking.garage.PricingPolicy
-import com.estapar.parking.garage.SectorMissingException
+import com.estapar.parking.ledger.RevenueLedgerRepository
+import com.estapar.parking.sector.SectorService
+import com.estapar.parking.session.SessionService
 import org.springframework.stereotype.Service
 import java.math.RoundingMode
 import java.time.Clock
@@ -15,15 +15,15 @@ import java.time.ZoneOffset
 
 @Service
 class RevenueService(
-    private val sessions: ParkingSessionRepository,
-    private val sectors: SectorRepository,
+    private val sessionService: SessionService,
+    private val sectorService: SectorService,
     private val ledger: RevenueLedgerRepository,
     private val pricing: PricingPolicy,
     private val clock: Clock,
 ) {
 
     fun revenueFor(date: LocalDate, sector: String): RevenueResponse {
-        sectors.findByName(sector) ?: throw SectorNotFoundException(sector)
+        sectorService.findByName(sector) ?: throw SectorNotFoundException(sector)
 
         val start = date.atStartOfDay().toInstant(ZoneOffset.UTC)
         val end = date.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
@@ -37,12 +37,12 @@ class RevenueService(
     }
 
     fun addRevenue(event: AddToRevenueEvent) {
-        val session = sessions.findById(event.sessionId).orElse(null)
+        val session = sessionService.findById(event.sessionId)
             ?: error("Sessão ${event.sessionId} referenciada por AddToRevenueEvent não existe")
         val sectorName = requireNotNull(session.sector) { "Sessão ${event.sessionId} sem sector" }
         val multiplier = requireNotNull(session.priceMultiplier) { "Sessão ${event.sessionId} sem price_multiplier" }
 
-        val sector = sectors.findByName(sectorName) ?: throw SectorMissingException(sectorName)
+        val sector = sectorService.findByName(sectorName) ?: throw SectorMissingException(sectorName)
 
         val seconds = Duration.between(session.entryTime, event.exitTime).seconds
         val amount = pricing.feeFor(seconds, sector.basePrice, multiplier)

@@ -277,7 +277,7 @@ class RevenueService(
 }
 ```
 
-`SectorMissingException` é reaproveitada do pacote `garage/` (D2 do [`revenue.md`](./revenue.md) original discutia o porquê de **não** reusar essa exceção no caminho de consulta — aqui o caminho é diferente: a hierarquia `WebhookEventIgnored` faz sentido no `addRevenue`, porque o listener roda **dentro** do dispatch do webhook).
+`SectorMissingException` é reaproveitada do domínio (D2 do [`revenue.md`](./revenue.md) original discutia o porquê de **não** reusar essa exceção no caminho de consulta — aqui o caminho é diferente: a hierarquia `DomainRuleViolation` faz sentido no `addRevenue`, porque o listener roda **dentro** do dispatch do webhook e qualquer falha de regra deve rollback'ar a saída).
 
 ### `revenue/AddToRevenueListener.kt`
 

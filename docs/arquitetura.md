@@ -40,25 +40,28 @@
 com.estapar.parking
 ├── EstaparParkingApplication.kt   ← entrypoint
 ├── config/                        ← infra (RestClient, Clock, properties, OpenAPI)
-├── domain/                        ← entidades JPA + repositórios (inclui revenue_ledger)
-├── simulator/                     ← cliente HTTP do simulador + bootstrap
-├── garage/                        ← regras de ENTRY/PARKED/EXIT + PricingPolicy
+├── domain/                        ← entidades JPA + repositórios + services de contexto + exceções de domínio
+├── simulator/                     ← cliente HTTP do simulador + bootstrap (consome SectorService / SpotService)
+├── garage/                        ← orquestra ENTRY/PARKED/EXIT + PricingPolicy
 ├── webhook/                       ← endpoint POST (transporte; delega ao garage)
-└── revenue/                       ← endpoint GET + listener de AddToRevenueEvent
+└── revenue/                       ← endpoint GET + listener de AddToRevenueEvent (consome SessionService / SectorService)
 ```
 
 **Por que package-by-feature?**
 - Mudanças num domínio ficam contidas num pacote.
 - Reduz acoplamento entre features: `revenue` não precisa importar nada de `webhook`. A comunicação entre `garage` e `revenue` é mediada por evento de domínio (`AddToRevenueEvent`) — sem chamada direta entre services.
 - `domain/` é a única fronteira compartilhada — o que é compartilhado fica explícito.
+- Feature services (`GarageService`, `RevenueService`, `GarageBootstrap`) **não enxergam repositórios** — falam apenas com os services de contexto em `domain/` (`SessionService`, `SpotService`, `SectorService`). Repositórios são detalhe de implementação do domínio.
 
 ### Camadas
 
 | Camada | Responsabilidade | Regras |
 |---|---|---|
-| **Controller** (`*Controller.kt`) | HTTP I/O: bind de DTO, validação, status code | **Nunca** contém regra de negócio. Só orquestra: recebe → chama service → devolve |
-| **Service** (`*Service.kt`) | Regras de negócio + transação | `@Transactional` aqui (não no controller). Orquestra repositórios |
-| **Domain** (entities + repos) | Persistência e modelo | Sem lógica HTTP. Repos enxutos: só os métodos efetivamente usados |
+| **Controller** (`*Controller.kt`) | HTTP I/O: bind de DTO, validação, status code | **Nunca** contém regra de negócio. Só orquestra: recebe → chama feature service → devolve |
+| **Feature service** (`GarageService`, `RevenueService`) | Orquestração de regras cross-contexto + `@Transactional` | Não toca repositórios. Conversa com services de contexto e publica/consome eventos |
+| **Domain service** (`SessionService`, `SpotService`, `SectorService`) | Operações de um único agregado: finders, salvamentos, transições de estado | Encapsula o repo. Chama métodos das entidades; traduz `ObjectOptimisticLockingFailureException` em exceção de domínio |
+| **Entidade JPA** | Estado + invariantes do agregado | Regras de transição (`park()`, `exit()`, `occupy()`, …) vivem aqui. Validações lançam exceções de `DomainExceptions.kt` |
+| **Repositório** | Persistência pura | Sem CAS UPDATE, sem regra de estado. Apenas `JpaRepository` + finders ou locks pessimistas legítimos (ex.: `findByNameForUpdate`) |
 | **Config** | Beans, properties, integrações externas | Nada de regra de negócio |
 
 ### Fluxo de uma requisição (exemplo: `POST /webhook`)
@@ -68,20 +71,31 @@ HTTP request
     ▼
 WebhookController.receive(WebhookEvent)        ← bind Jackson, sealed type discriminado por event_type
     ▼
-GarageService.{registerEntry|parkVehicle|processExit}   ← @Transactional, regra por tipo
+GarageService.{registerEntry|parkVehicle|processExit}   ← @Transactional, orquestra
     │
-    ├─ EntryEvent  → registerEntry()           ← valida sessão aberta, persiste ParkingSession
-    ├─ ParkedEvent → parkVehicle()             ← aloca vaga, congela price_multiplier
-    └─ ExitEvent   → processExit()             ← grava exit_time, libera vaga,
-                                                  publishEvent(AddToRevenueEvent)
-                                                        ▼
-                                                  RevenueService.addRevenue()   ← @EventListener síncrono,
-                                                                                   mesma TX do exit:
-                                                                                   calcula tarifa via
-                                                                                   PricingPolicy e grava
-                                                                                   revenue_ledger
-    ▼
-ParkingSessionRepository / SpotRepository / RevenueLedgerRepository
+    ├─ EntryEvent  → registerEntry()
+    │     ├─ sectorService.isAnyOpenAt(time)
+    │     └─ sessionService.openByPlate(plate, entry)
+    │
+    ├─ ParkedEvent → parkVehicle()
+    │     ├─ sessionService.findOpenByPlate(plate)
+    │     ├─ spotService.findByCoordinates(lat, lng)
+    │     ├─ sectorService.lockByName(spot.sector)   ← pessimistic, regra de capacidade
+    │     ├─ spotService.countOccupiedIn(sector)
+    │     ├─ spotService.occupy(spot)                ← spot.occupy() + saveAndFlush; race ⇒ SpotAlreadyOccupiedException
+    │     └─ sessionService.markParked(...)          ← session.park() + saveAndFlush; race ⇒ SessionAlreadyParkedException
+    │
+    └─ ExitEvent   → processExit()
+          ├─ sessionService.findOpenByPlate(plate)
+          ├─ spotService.findById(session.spotId)
+          ├─ sessionService.markExited(session, exit)  ← session.exit() + saveAndFlush; race ⇒ SessionAlreadyExitedException
+          ├─ spotService.release(spot)
+          └─ publishEvent(AddToRevenueEvent)
+                ▼
+                RevenueService.addRevenue()   ← @EventListener síncrono, mesma TX:
+                  ├─ sessionService.findById(event.sessionId)
+                  ├─ sectorService.findByName(session.sector)
+                  └─ ledger.save(...)         ← calcula via PricingPolicy, grava revenue_ledger
     ▼
 HTTP 200
 ```
@@ -93,9 +107,55 @@ Saída do veículo dispara dois efeitos distintos: liberar a vaga (operacional, 
 | Decisão | Justificativa |
 |---|---|
 | **Listener síncrono (`@EventListener` sem `@Async` nem `@TransactionalEventListener`)** | Roda na mesma transação do `processExit`. Se o `INSERT` no ledger falhar, todo o exit dá rollback — não existe estado "carro saiu sem receita registrada". É a opção que dispensa outbox/retry, em troca de acoplar a disponibilidade do ledger à do exit. |
-| **Evento carrega `exitTime` no payload** | `markExited` é `@Modifying` UPDATE — não atualiza o cache JPA de 1º nível. Passar `exitTime` no evento evita ler valor stale na re-fetch que o listener faz. |
+| **Evento carrega `exitTime` no payload** | Mantém o evento auto-descritivo (consumidor não precisa abrir a entidade para saber em que instante a saída aconteceu). Também desacopla o consumidor da forma como o produtor persiste o estado. |
 | **Listener fica em `revenue/`, evento publicado por `garage`** | Mantém o consumidor dono da reação. `garage` só conhece o tipo do evento (importa `AddToRevenueEvent`), não como a receita é contabilizada. |
 | **Idempotência no banco** | `revenue_ledger.session_id` é `UNIQUE` — qualquer republicação acidental falha no insert e o exit rolla back, sem ledger duplicado. |
+
+### Domain services e regra de estado no agregado
+
+A camada anterior tinha dois sintomas clássicos de violação de boundary:
+
+- **Feature services chamavam repositórios de múltiplos contextos.** `GarageService` injetava `ParkingSessionRepository`, `SpotRepository` e `SectorRepository` ao mesmo tempo, decidindo quando salvar cada um. Modificações na regra de uma entidade puxavam edição em vários pontos.
+- **Regra de estado dentro de query SQL.** `markParked`/`markExited`/`tryOccupy` eram `@Modifying` UPDATE com `WHERE` que filtrava o estado de origem (`exit_time IS NULL`, `occupied = false`). Idempotência grátis no banco, mas a regra de transição ficava espalhada entre Kotlin e JPQL — ruim para testar e para evoluir.
+
+Solução em duas frentes:
+
+**1. Services de contexto em `domain/`** (`SessionService`, `SpotService`, `SectorService`). Cada feature service fala só com esses; os repositórios viraram detalhe interno do domínio. O exemplo do `processExit` deixa de ser:
+
+```kotlin
+sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate)
+spots.findById(spotId)
+sessions.markExited(id, exitInstant)
+spots.findById(spotId).get().apply { occupied = false }
+```
+
+para:
+
+```kotlin
+val session = sessionService.findOpenByPlate(plate) ?: throw ...
+val spot = spotService.findById(session.spotId) ?: error(...)
+sessionService.markExited(session, exitInstant)
+spotService.release(spot)
+```
+
+**2. Comportamento nas entidades + optimistic locking.** As regras de transição mudam de SQL para método de entidade:
+
+```kotlin
+fun park(parkedAt: Instant, sector: String, spotId: Long, multiplier: BigDecimal) {
+    if (parkedTime != null) throw SessionAlreadyParkedException(licensePlate)
+    this.parkedTime = parkedAt; this.sector = sector
+    this.spotId = spotId;       this.priceMultiplier = multiplier
+}
+```
+
+A atomicidade que a CAS UPDATE dava de graça vem agora de `@Version`: cada `saveAndFlush` no service emite `UPDATE … WHERE id = ? AND version = ?` e, se duas transações tentarem a mesma transição, a perdedora ergue `ObjectOptimisticLockingFailureException`, que o service traduz em `SessionAlreadyParkedException`/`SessionAlreadyExitedException`/`SpotAlreadyOccupiedException`.
+
+| Decisão | Justificativa |
+|---|---|
+| **`@Version` (optimistic) em `ParkingSession`, `Spot`, `Sector`** | Sem locks de banco no caminho feliz; corridas reais são raras (uma placa não passa duas vezes na cancela simultaneamente). Falha rápido e o service traduz em exceção de negócio. |
+| **Pessimistic mantido em `sectorService.lockByName`** | A checagem de capacidade (`countOccupiedIn` vs `maxCapacity`) precisa serializar o setor: dois `parkVehicle` simultâneos no mesmo setor poderiam ambos ver "ocupação 9/10" e ocupar a vaga 10 — `SELECT … FOR UPDATE` no setor fecha essa janela. Não é CAS — é serialização legítima de recurso compartilhado. |
+| **Domain services não impõem `@Transactional`** | A transação é aberta pelo feature service (`GarageService`/`RevenueService`); todos os calls aos domain services participam dela. Anotar `@Transactional` no domain service iria propagar `REQUIRED` redundante e poderia mascarar uso fora de TX. |
+| **Hierarquia `DomainRuleViolation` vive em `domain/`** | É exceção de regra de domínio: indica que a operação não pôde prosseguir por causa de um invariante do domínio. `WebhookController` captura o sealed base e devolve 200 (política de callsite), mas o tipo pertence ao domínio e ganhou nome neutro depois de migrar de `garage/GarageExceptions.kt`. |
 
 ## 3. Tecnologias e decisões
 

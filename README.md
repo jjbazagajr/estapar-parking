@@ -118,14 +118,14 @@ Regras-chave (detalhes em [`docs/contexto.md`](docs/contexto.md)):
 com.estapar.parking
 ├── EstaparParkingApplication.kt
 ├── config/        infra (RestClient, Clock, properties, OpenAPI)
-├── domain/        entidades JPA + repositórios (inclui revenue_ledger)
+├── domain/        entidades JPA + repositórios + services de contexto + exceções de domínio
 ├── simulator/     cliente HTTP do simulador + bootstrap inicial
-├── garage/        regras de negócio (ENTRY/PARKED/EXIT) + PricingPolicy
+├── garage/        orquestra ENTRY/PARKED/EXIT + PricingPolicy
 ├── webhook/       POST /webhook (transporte; delega ao garage)
 └── revenue/       GET /revenue + AddToRevenueListener (consome evento do EXIT)
 ```
 
-A saída de um veículo dispara `AddToRevenueEvent` publicado por `GarageService.processExit` e consumido por `RevenueService.addRevenue` (listener síncrono na mesma transação), que calcula a tarifa via `PricingPolicy` e grava um lançamento em `revenue_ledger`. Detalhes e racional da escolha sync vs assíncrono em [`docs/arquitetura.md`](docs/arquitetura.md#comunicação-cross-feature-via-spring-events).
+Feature services (`GarageService`, `RevenueService`, `GarageBootstrap`) **não tocam repositórios** — falam apenas com os domain services em `domain/` (`SessionService`, `SpotService`, `SectorService`). Regras de transição (`session.park()`, `spot.occupy()`, etc.) vivem nas entidades; concorrência é controlada por `@Version` em `ParkingSession`/`Spot`/`Sector` (optimistic locking) — corridas reais são traduzidas em exceções de domínio pelos services. A saída de um veículo dispara `AddToRevenueEvent` publicado por `GarageService.processExit` e consumido por `RevenueService.addRevenue` (listener síncrono na mesma transação), que calcula a tarifa via `PricingPolicy` e grava um lançamento em `revenue_ledger`. Detalhes em [`docs/arquitetura.md`](docs/arquitetura.md#domain-services-e-regra-de-estado-no-agregado).
 
 | Camada | Responsabilidade |
 |---|---|
@@ -236,7 +236,7 @@ O modelo atual assume **uma** garagem implícita. Para a operação real da Esta
 - Métricas (Micrometer + Prometheus): contadores por `event_type`, percentis de duração do webhook, taxa de eventos ignorados, ocupação por setor em tempo real.
 - Tracing distribuído (OpenTelemetry) — essencial quando o pipeline virar webhook → fila → consumer → banco.
 - Structured logging com `trace_id` correlacionando ENTRY → PARKED → EXIT da mesma sessão.
-- Dashboards/alarmes para: ocupação ≥ 95% por setor, taxa de `WebhookEventIgnored`, lag do consumer.
+- Dashboards/alarmes para: ocupação ≥ 95% por setor, taxa de `DomainRuleViolation` ignoradas pelo webhook, lag do consumer.
 
 ### Resiliência
 

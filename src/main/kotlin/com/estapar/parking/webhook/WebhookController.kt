@@ -1,7 +1,7 @@
 package com.estapar.parking.webhook
 
+import com.estapar.parking.domain.DomainRuleViolation
 import com.estapar.parking.garage.GarageService
-import com.estapar.parking.garage.WebhookEventIgnored
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.slf4j.LoggerFactory
@@ -30,7 +30,7 @@ class WebhookController(
                 is ParkedEvent -> garage.parkVehicle(event.licensePlate, event.lat, event.lng)
                 is ExitEvent -> garage.processExit(event.licensePlate, event.exitTime)
             }
-        } catch (ex: WebhookEventIgnored) {
+        } catch (ex: DomainRuleViolation) {
             log.info(
                 "evento ignorado: type={} plate={} reason={}",
                 event.javaClass.simpleName, event.licensePlate, ex.message,

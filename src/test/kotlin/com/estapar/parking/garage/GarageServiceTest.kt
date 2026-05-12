@@ -1,18 +1,27 @@
 package com.estapar.parking.garage
 
+import com.estapar.parking.domain.GarageClosedException
 import com.estapar.parking.domain.ParkingSession
-import com.estapar.parking.domain.ParkingSessionRepository
 import com.estapar.parking.domain.Sector
-import com.estapar.parking.domain.SectorRepository
+import com.estapar.parking.domain.SectorClosedException
+import com.estapar.parking.domain.SectorFullException
+import com.estapar.parking.domain.SectorMissingException
+import com.estapar.parking.domain.SessionAlreadyExitedException
+import com.estapar.parking.domain.SessionNotFoundException
+import com.estapar.parking.domain.SessionNotParkedException
 import com.estapar.parking.domain.Spot
-import com.estapar.parking.domain.SpotRepository
+import com.estapar.parking.domain.SpotNotFoundException
+import com.estapar.parking.sector.SectorService
+import com.estapar.parking.session.SessionService
+import com.estapar.parking.spot.SpotService
 import com.estapar.parking.revenue.AddToRevenueEvent
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
+import org.mockito.ArgumentMatchers.any
 import org.mockito.ArgumentMatchers.anyLong
 import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.`when`
+import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
@@ -23,19 +32,18 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneOffset
-import java.util.Optional
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class GarageServiceTest {
 
-    private val sessions: ParkingSessionRepository = mock(ParkingSessionRepository::class.java)
-    private val spots: SpotRepository = mock(SpotRepository::class.java)
-    private val sectors: SectorRepository = mock(SectorRepository::class.java)
+    private val sessionService: SessionService = mock(SessionService::class.java)
+    private val spotService: SpotService = mock(SpotService::class.java)
+    private val sectorService: SectorService = mock(SectorService::class.java)
     private val events: ApplicationEventPublisher = mock(ApplicationEventPublisher::class.java)
     private val fixedInstant: Instant = Instant.parse("2026-05-10T12:00:00Z")
     private val clock: Clock = Clock.fixed(fixedInstant, ZoneOffset.UTC)
-    private val service = GarageService(sessions, spots, sectors, clock, PricingPolicy(), events)
+    private val service = GarageService(sessionService, spotService, sectorService, clock, PricingPolicy(), events)
 
     private val anyTime: LocalDateTime = LocalDateTime.of(2026, 5, 10, 12, 0)
     private val plate = "ABC1D23"
@@ -43,142 +51,56 @@ class GarageServiceTest {
     private val lng = -46.655981
     private val sessionId = 42L
 
-    @BeforeEach
-    fun stubAtomicUpdatesSucceed() {
-        `when`(
-            sessions.markParked(
-                anyLong(),
-                anyInstantArg(),
-                anyString(),
-                anyLong(),
-                anyBigDecimalArg(),
-            ),
-        ).thenReturn(1)
-        `when`(sessions.markExited(anyLong(), anyInstantArg())).thenReturn(1)
-        `when`(spots.tryOccupy(anyLong())).thenReturn(1)
-    }
-
     @Test
-    fun `given garagem aberta when register entry then salva sessao sem multiplier (definido no PARKED)`() {
+    fun `given garagem aberta when register entry then delega para sessionService_openByPlate`() {
         // given
-        stubOpenGarage()
-        stubNoOpenSession()
+        `when`(sectorService.isAnyOpenAt(any(LocalTime::class.java) ?: LocalTime.MIN)).thenReturn(true)
 
         // when
         service.registerEntry(plate, anyTime)
 
         // then
-        val captor = ArgumentCaptor.forClass(ParkingSession::class.java)
-        verify(sessions).save(captor.capture())
-        assertEquals(plate, captor.value.licensePlate)
-        assertEquals(null, captor.value.priceMultiplier)
+        verify(sessionService).openByPlate(plate, anyTime.toInstant(ZoneOffset.UTC))
     }
 
     @Test
-    fun `given placa com sessao aberta when register entry then lanca SessionAlreadyOpenException`() {
+    fun `given garagem fechada when register entry then lanca GarageClosedException e nao abre sessao`() {
         // given
-        stubOpenGarage()
-        `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
-            .thenReturn(openSession())
+        `when`(sectorService.isAnyOpenAt(any(LocalTime::class.java) ?: LocalTime.MIN)).thenReturn(false)
 
         // when / then
-        assertFailsWith<SessionAlreadyOpenException> { service.registerEntry(plate, anyTime) }
-    }
-
-    @Test
-    fun `given todos setores fechados no horario when register entry then lanca GarageClosedException`() {
-        // given
-        val entryAt3am = LocalDateTime.of(2026, 5, 10, 3, 0)
-        `when`(sectors.findAll()).thenReturn(
-            listOf(sectorOpenBetween("A", LocalTime.of(8, 0), LocalTime.of(18, 0))),
-        )
-
-        // when / then
-        assertFailsWith<GarageClosedException> { service.registerEntry(plate, entryAt3am) }
-    }
-
-    @Test
-    fun `given pelo menos um setor aberto no horario when register entry then aceita`() {
-        // given
-        val entryAt3am = LocalDateTime.of(2026, 5, 10, 3, 0)
-        `when`(sectors.findAll()).thenReturn(
-            listOf(
-                sectorOpenBetween("A", LocalTime.of(0, 0), LocalTime.of(23, 59)),
-                sectorOpenBetween("B", LocalTime.of(8, 0), LocalTime.of(18, 0)),
-            ),
-        )
-        stubNoOpenSession()
-
-        // when
-        service.registerEntry(plate, entryAt3am)
-
-        // then
-        verify(sessions).save(org.mockito.ArgumentMatchers.any(ParkingSession::class.java))
-    }
-
-    @Test
-    fun `given setor sem open hour e close hour when register entry then trata como sempre aberto`() {
-        // given
-        `when`(sectors.findAll()).thenReturn(
-            listOf(sectorOpenBetween("A", open = null, close = null)),
-        )
-        stubNoOpenSession()
-
-        // when
-        service.registerEntry(plate, anyTime)
-
-        // then
-        verify(sessions).save(org.mockito.ArgumentMatchers.any(ParkingSession::class.java))
+        assertFailsWith<GarageClosedException> { service.registerEntry(plate, anyTime) }
+        verify(sessionService, never()).openByPlate(anyString(), any(Instant::class.java) ?: Instant.EPOCH)
     }
 
     @Test
     fun `given placa sem sessao aberta when park vehicle then lanca SessionNotFoundException`() {
         // given
-        stubNoOpenSession()
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(null)
 
         // when / then
         assertFailsWith<SessionNotFoundException> { service.parkVehicle(plate, lat, lng) }
     }
 
     @Test
-    fun `given markParked retorna 0 (sessao ja parqueada) when park vehicle then lanca SessionAlreadyParkedException`() {
+    fun `given coordenadas sem vaga when park vehicle then propaga SpotNotFoundException do service`() {
         // given
-        stubParkScenario(currentlyOccupied = 0)
-        `when`(
-            sessions.markParked(
-                anyLong(),
-                anyInstantArg(),
-                anyString(),
-                anyLong(),
-                anyBigDecimalArg(),
-            ),
-        ).thenReturn(0)
-
-        // when / then
-        assertFailsWith<SessionAlreadyParkedException> { service.parkVehicle(plate, lat, lng) }
-    }
-
-    @Test
-    fun `given coordenadas sem vaga when park vehicle then lanca SpotNotFoundException`() {
-        // given
-        `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
-            .thenReturn(openSession())
-        `when`(spots.findFirstByLatAndLng(lat, lng)).thenReturn(null)
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(openSession())
+        `when`(spotService.findByCoordinates(lat, lng)).thenThrow(SpotNotFoundException(lat, lng))
 
         // when / then
         assertFailsWith<SpotNotFoundException> { service.parkVehicle(plate, lat, lng) }
     }
 
     @Test
-    fun `given vaga ja ocupada when park vehicle then lanca SpotAlreadyOccupiedException`() {
+    fun `given setor referenciado pelo spot ausente when park vehicle then lanca SectorMissingException`() {
         // given
-        `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
-            .thenReturn(openSession())
-        `when`(spots.findFirstByLatAndLng(lat, lng))
-            .thenReturn(spotAt(id = 7, sector = "A", occupied = true))
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(openSession())
+        `when`(spotService.findByCoordinates(lat, lng)).thenReturn(spotAt(7L, "A"))
+        `when`(sectorService.lockByName("A")).thenReturn(null)
 
         // when / then
-        assertFailsWith<SpotAlreadyOccupiedException> { service.parkVehicle(plate, lat, lng) }
+        assertFailsWith<SectorMissingException> { service.parkVehicle(plate, lat, lng) }
     }
 
     @Test
@@ -191,41 +113,17 @@ class GarageServiceTest {
     }
 
     @Test
-    fun `given setor referenciado pelo spot ausente when park vehicle then lanca SectorMissingException`() {
-        // given
-        `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
-            .thenReturn(openSession())
-        `when`(spots.findFirstByLatAndLng(lat, lng))
-            .thenReturn(spotAt(id = 7, sector = "A"))
-        `when`(sectors.findByNameForUpdate("A")).thenReturn(null)
-
-        // when / then
-        assertFailsWith<SectorMissingException> { service.parkVehicle(plate, lat, lng) }
-    }
-
-    @Test
-    fun `given setor cheio (occupied == maxCapacity) when park vehicle then lanca SectorFullException`() {
+    fun `given setor cheio (occupied == maxCapacity) when park vehicle then lanca SectorFullException e nao ocupa vaga`() {
         // given
         stubParkScenario(maxCapacity = 10, currentlyOccupied = 10)
 
         // when / then
         assertFailsWith<SectorFullException> { service.parkVehicle(plate, lat, lng) }
-        verify(spots, never()).tryOccupy(anyLong())
+        verify(spotService, never()).occupy(any(Spot::class.java) ?: Spot(id = 0L, sector = "", lat = 0.0, lng = 0.0))
     }
 
     @Test
-    fun `given tryOccupy retorna 0 (corrida cross-session) when park vehicle then lanca SpotAlreadyOccupiedException`() {
-        // given
-        stubParkScenario(currentlyOccupied = 5)
-        `when`(spots.tryOccupy(7L)).thenReturn(0)
-
-        // when / then
-        assertFailsWith<SpotAlreadyOccupiedException> { service.parkVehicle(plate, lat, lng) }
-        verify(sessions, never()).markParked(anyLong(), anyInstantArg(), anyString(), anyLong(), anyBigDecimalArg())
-    }
-
-    @Test
-    fun `given sessao valida e vaga livre when park vehicle then chama tryOccupy na vaga e markParked com multiplier do setor`() {
+    fun `given sessao valida e vaga livre when park vehicle then ocupa vaga e marca sessao parked com multiplier do setor`() {
         // given
         stubParkScenario(maxCapacity = 10, currentlyOccupied = 2)
 
@@ -233,80 +131,50 @@ class GarageServiceTest {
         service.parkVehicle(plate, lat, lng)
 
         // then
-        verify(spots).tryOccupy(7L)
-        val call = capturedMarkParkedCall()
-        assertEquals(sessionId, call.id)
-        assertEquals("A", call.sector)
-        assertEquals(7L, call.spotId)
-        assertEquals(fixedInstant, call.parkedTime)
-        assertEquals(0, BigDecimal("0.90").compareTo(call.multiplier))
-        verify(sessions, never()).save(org.mockito.ArgumentMatchers.any(ParkingSession::class.java))
+        verify(spotService).occupy(any(Spot::class.java) ?: Spot(id = 0L, sector = "", lat = 0.0, lng = 0.0))
+        val multCap = ArgumentCaptor.forClass(BigDecimal::class.java)
+        verify(sessionService).markParked(
+            any(ParkingSession::class.java) ?: openSession(),
+            eqInstant(fixedInstant),
+            eqString("A"),
+            eqLong(7L),
+            multCap.capture() ?: BigDecimal.ZERO,
+        )
+        assertEquals(0, BigDecimal("0.90").compareTo(multCap.value))
     }
 
     @Test
     fun `given setor com 0 porcento ocupacao when park vehicle then markParked com multiplier 0_90`() {
-        // given
         stubParkScenario(maxCapacity = 10, currentlyOccupied = 0)
-
-        // when
         service.parkVehicle(plate, lat, lng)
-
-        // then
-        assertEquals(0, BigDecimal("0.90").compareTo(capturedMarkParkedCall().multiplier))
+        assertEquals(0, BigDecimal("0.90").compareTo(capturedMultiplier()))
     }
 
     @Test
     fun `given setor com 49 porcento ocupacao when park vehicle then markParked com multiplier 1_00`() {
-        // given
         stubParkScenario(maxCapacity = 100, currentlyOccupied = 49)
-
-        // when
         service.parkVehicle(plate, lat, lng)
-
-        // then
-        assertEquals(0, BigDecimal("1.00").compareTo(capturedMarkParkedCall().multiplier))
+        assertEquals(0, BigDecimal("1.00").compareTo(capturedMultiplier()))
     }
 
     @Test
     fun `given setor com 74 porcento ocupacao when park vehicle then markParked com multiplier 1_10`() {
-        // given
         stubParkScenario(maxCapacity = 100, currentlyOccupied = 74)
-
-        // when
         service.parkVehicle(plate, lat, lng)
-
-        // then
-        assertEquals(0, BigDecimal("1.10").compareTo(capturedMarkParkedCall().multiplier))
+        assertEquals(0, BigDecimal("1.10").compareTo(capturedMultiplier()))
     }
 
     @Test
     fun `given setor com 99 porcento ocupacao when park vehicle then markParked com multiplier 1_25`() {
-        // given
         stubParkScenario(maxCapacity = 100, currentlyOccupied = 99)
-
-        // when
         service.parkVehicle(plate, lat, lng)
-
-        // then
-        assertEquals(0, BigDecimal("1.25").compareTo(capturedMarkParkedCall().multiplier))
-    }
-
-    @Test
-    fun `given setor sem open hour e close hour when park vehicle then aceita`() {
-        // given
-        stubParkScenario(sectorOpen = null, sectorClose = null)
-
-        // when
-        service.parkVehicle(plate, lat, lng)
-
-        // then
-        verify(spots).tryOccupy(7L)
+        assertEquals(0, BigDecimal("1.25").compareTo(capturedMultiplier()))
     }
 
     @Test
     fun `given placa sem sessao aberta when process exit then lanca SessionNotFoundException`() {
         // given
-        stubNoOpenSession()
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(null)
 
         // when / then
         assertFailsWith<SessionNotFoundException> { service.processExit(plate, anyTime) }
@@ -315,20 +183,7 @@ class GarageServiceTest {
     @Test
     fun `given sessao sem spot vinculado when process exit then lanca SessionNotParkedException`() {
         // given
-        stubSession(openSession())
-
-        // when / then
-        assertFailsWith<SessionNotParkedException> { service.processExit(plate, anyTime.plusHours(1)) }
-    }
-
-    @Test
-    fun `given sessao sem sector vinculado when process exit then lanca SessionNotParkedException`() {
-        // given (defensivo — inalcançavel pelo parkVehicle real, que seta spotId e sector juntos)
-        val session = openSession().apply {
-            spotId = 7L
-            sector = null
-        }
-        stubSession(session)
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(openSession())
 
         // when / then
         assertFailsWith<SessionNotParkedException> { service.processExit(plate, anyTime.plusHours(1)) }
@@ -337,65 +192,28 @@ class GarageServiceTest {
     @Test
     fun `given spot da sessao removido do banco when process exit then lanca IllegalStateException`() {
         // given
-        stubSession(parkedSession(anyTime))
-        `when`(spots.findById(7L)).thenReturn(Optional.empty())
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(parkedSession(anyTime))
+        `when`(spotService.findById(7L)).thenReturn(null)
 
         // when / then
         assertFailsWith<IllegalStateException> { service.processExit(plate, anyTime.plusHours(1)) }
     }
 
     @Test
-    fun `given exit antes de entry when process exit then lanca IllegalStateException`() {
+    fun `given exit valido when process exit then marca exited, libera vaga e publica AddToRevenueEvent`() {
         // given
-        stubSession(parkedSession(anyTime))
-
-        // when / then
-        assertFailsWith<IllegalStateException> { service.processExit(plate, anyTime.minusSeconds(1)) }
-    }
-
-    @Test
-    fun `given exit valido when process exit then libera spot definido pela sessao`() {
-        // given
-        val spot = spotAt(id = 7, sector = "A", occupied = true)
-        stubSession(parkedSession(anyTime))
-        stubSpot(7L, spot)
-
-        // when
-        service.processExit(plate, anyTime.plusHours(1))
-
-        // then
-        assertEquals(false, spot.occupied)
-        verify(spots, never()).save(org.mockito.ArgumentMatchers.any(Spot::class.java))
-    }
-
-    @Test
-    fun `given exit valido when process exit then chama markExited apenas com id e exit time`() {
-        // given
-        stubSession(parkedSession(anyTime))
-        stubSpot(7L, spotAt(id = 7, sector = "A", occupied = true))
+        val session = parkedSession(anyTime)
+        val spot = spotAt(7L, "A", occupied = true)
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(session)
+        `when`(spotService.findById(7L)).thenReturn(spot)
 
         // when
         val exit = anyTime.plusHours(1)
         service.processExit(plate, exit)
 
         // then
-        val call = capturedMarkExitedCall()
-        assertEquals(sessionId, call.id)
-        assertEquals(exit.toInstant(ZoneOffset.UTC), call.exitTime)
-        verify(sessions, never()).save(org.mockito.ArgumentMatchers.any(ParkingSession::class.java))
-    }
-
-    @Test
-    fun `given exit valido when process exit then publica AddToRevenueEvent com sessionId e exitTime`() {
-        // given
-        stubSession(parkedSession(anyTime))
-        stubSpot(7L, spotAt(id = 7, sector = "A", occupied = true))
-
-        // when
-        val exit = anyTime.plusHours(1)
-        service.processExit(plate, exit)
-
-        // then
+        verify(sessionService).markExited(session, exit.toInstant(ZoneOffset.UTC))
+        verify(spotService).release(spot)
         val cap = ArgumentCaptor.forClass(AddToRevenueEvent::class.java)
         verify(events).publishEvent(cap.capture() ?: AddToRevenueEvent(0L, Instant.EPOCH))
         assertEquals(sessionId, cap.value.sessionId)
@@ -403,30 +221,19 @@ class GarageServiceTest {
     }
 
     @Test
-    fun `given markExited retorna 0 (sessao ja encerrada) when process exit then lanca SessionAlreadyExitedException, nao libera vaga e nao publica evento`() {
+    fun `given sessionService_markExited lanca SessionAlreadyExitedException when process exit then propaga e nao publica evento`() {
         // given
-        val spot = spotAt(id = 7, sector = "A", occupied = true)
-        stubSession(parkedSession(anyTime))
-        stubSpot(7L, spot)
-        `when`(sessions.markExited(anyLong(), anyInstantArg())).thenReturn(0)
+        val session = parkedSession(anyTime)
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(session)
+        `when`(spotService.findById(7L)).thenReturn(spotAt(7L, "A", occupied = true))
+        doThrow(SessionAlreadyExitedException(plate))
+            .`when`(sessionService).markExited(any(ParkingSession::class.java) ?: session, any(Instant::class.java) ?: Instant.EPOCH)
 
         // when / then
         assertFailsWith<SessionAlreadyExitedException> {
             service.processExit(plate, anyTime.plusHours(1))
         }
-        assertEquals(true, spot.occupied)
-        verify(events, never()).publishEvent(org.mockito.ArgumentMatchers.any(AddToRevenueEvent::class.java))
-    }
-
-    private fun stubOpenGarage() {
-        `when`(sectors.findAll()).thenReturn(
-            listOf(sectorOpenBetween("A", LocalTime.of(0, 0), LocalTime.of(23, 59))),
-        )
-    }
-
-    private fun stubNoOpenSession() {
-        `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
-            .thenReturn(null)
+        verify(events, never()).publishEvent(any(AddToRevenueEvent::class.java) ?: AddToRevenueEvent(0L, Instant.EPOCH))
     }
 
     private fun stubParkScenario(
@@ -435,20 +242,17 @@ class GarageServiceTest {
         maxCapacity: Int = 10,
         currentlyOccupied: Long = 0,
     ) {
-        `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
-            .thenReturn(openSession())
-        `when`(spots.findFirstByLatAndLng(lat, lng))
-            .thenReturn(spotAt(id = 7, sector = "A"))
-        `when`(sectors.findByNameForUpdate("A"))
+        `when`(sessionService.findOpenByPlate(plate)).thenReturn(openSession())
+        `when`(spotService.findByCoordinates(lat, lng)).thenReturn(spotAt(7L, "A"))
+        `when`(sectorService.lockByName("A"))
             .thenReturn(sectorOpenBetween("A", sectorOpen, sectorClose, maxCapacity))
-        `when`(spots.countBySectorAndOccupiedTrue("A")).thenReturn(currentlyOccupied)
+        `when`(spotService.countOccupiedIn("A")).thenReturn(currentlyOccupied)
     }
 
     private fun openSession() = ParkingSession(
         id = sessionId,
         licensePlate = plate,
         entryTime = anyTime.toInstant(ZoneOffset.UTC),
-        priceMultiplier = BigDecimal("1.00"),
     )
 
     private fun spotAt(id: Long, sector: String, occupied: Boolean = false) = Spot(
@@ -482,58 +286,30 @@ class GarageServiceTest {
         parkedTime = entry.toInstant(ZoneOffset.UTC),
     )
 
-    private fun stubSession(session: ParkingSession) {
-        `when`(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate))
-            .thenReturn(session)
-    }
-
-    private fun stubSpot(spotId: Long, spot: Spot) {
-        `when`(spots.findById(spotId)).thenReturn(Optional.of(spot))
-    }
-
-    private data class MarkParkedCall(
-        val id: Long,
-        val parkedTime: Instant,
-        val sector: String,
-        val spotId: Long,
-        val multiplier: BigDecimal,
-    )
-
-    private fun capturedMarkParkedCall(): MarkParkedCall {
-        val idCap = ArgumentCaptor.forClass(Long::class.javaObjectType)
-        val timeCap = ArgumentCaptor.forClass(Instant::class.java)
-        val sectorCap = ArgumentCaptor.forClass(String::class.java)
-        val spotCap = ArgumentCaptor.forClass(Long::class.javaObjectType)
+    private fun capturedMultiplier(): BigDecimal {
         val multCap = ArgumentCaptor.forClass(BigDecimal::class.java)
-        verify(sessions).markParked(
-            idCap.capture() ?: 0L,
-            timeCap.capture() ?: Instant.EPOCH,
-            sectorCap.capture() ?: "",
-            spotCap.capture() ?: 0L,
+        verify(sessionService).markParked(
+            any(ParkingSession::class.java) ?: openSession(),
+            any(Instant::class.java) ?: Instant.EPOCH,
+            anyString(),
+            anyLong(),
             multCap.capture() ?: BigDecimal.ZERO,
         )
-        return MarkParkedCall(idCap.value, timeCap.value, sectorCap.value, spotCap.value, multCap.value)
+        return multCap.value
     }
 
-    private data class MarkExitedCall(val id: Long, val exitTime: Instant)
-
-    private fun capturedMarkExitedCall(): MarkExitedCall {
-        val idCap = ArgumentCaptor.forClass(Long::class.javaObjectType)
-        val timeCap = ArgumentCaptor.forClass(Instant::class.java)
-        verify(sessions).markExited(
-            idCap.capture() ?: 0L,
-            timeCap.capture() ?: Instant.EPOCH,
-        )
-        return MarkExitedCall(idCap.value, timeCap.value)
+    private fun eqInstant(expected: Instant): Instant {
+        org.mockito.ArgumentMatchers.eq(expected)
+        return expected
     }
 
-    private fun anyInstantArg(): Instant {
-        org.mockito.ArgumentMatchers.any(Instant::class.java)
-        return Instant.EPOCH
+    private fun eqString(expected: String): String {
+        org.mockito.ArgumentMatchers.eq(expected)
+        return expected
     }
 
-    private fun anyBigDecimalArg(): BigDecimal {
-        org.mockito.ArgumentMatchers.any(BigDecimal::class.java)
-        return BigDecimal.ZERO
+    private fun eqLong(expected: Long): Long {
+        org.mockito.ArgumentMatchers.eq(expected)
+        return expected
     }
 }

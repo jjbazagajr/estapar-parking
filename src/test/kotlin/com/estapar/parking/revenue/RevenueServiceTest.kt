@@ -1,13 +1,13 @@
 package com.estapar.parking.revenue
 
 import com.estapar.parking.domain.ParkingSession
-import com.estapar.parking.domain.ParkingSessionRepository
 import com.estapar.parking.domain.RevenueLedgerEntry
-import com.estapar.parking.domain.RevenueLedgerRepository
 import com.estapar.parking.domain.Sector
-import com.estapar.parking.domain.SectorRepository
+import com.estapar.parking.domain.SectorMissingException
 import com.estapar.parking.garage.PricingPolicy
-import com.estapar.parking.garage.SectorMissingException
+import com.estapar.parking.ledger.RevenueLedgerRepository
+import com.estapar.parking.sector.SectorService
+import com.estapar.parking.session.SessionService
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
 import org.mockito.ArgumentMatchers.anyString
@@ -20,18 +20,17 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
-import java.util.Optional
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class RevenueServiceTest {
 
-    private val sessions: ParkingSessionRepository = mock(ParkingSessionRepository::class.java)
-    private val sectors: SectorRepository = mock(SectorRepository::class.java)
+    private val sessionService: SessionService = mock(SessionService::class.java)
+    private val sectorService: SectorService = mock(SectorService::class.java)
     private val ledger: RevenueLedgerRepository = mock(RevenueLedgerRepository::class.java)
     private val fixedInstant: Instant = Instant.parse("2026-05-11T15:30:00Z")
     private val clock: Clock = Clock.fixed(fixedInstant, ZoneOffset.UTC)
-    private val service = RevenueService(sessions, sectors, ledger, PricingPolicy(), clock)
+    private val service = RevenueService(sessionService, sectorService, ledger, PricingPolicy(), clock)
 
     private val anyDate: LocalDate = LocalDate.of(2025, 1, 1)
     private val sectorA = "A"
@@ -44,7 +43,7 @@ class RevenueServiceTest {
     @Test
     fun `given setor inexistente when revenueFor then lanca SectorNotFoundException e nao consulta ledger`() {
         // given
-        `when`(sectors.findByName(sectorA)).thenReturn(null)
+        `when`(sectorService.findByName(sectorA)).thenReturn(null)
 
         // when / then
         assertFailsWith<SectorNotFoundException> { service.revenueFor(anyDate, sectorA) }
@@ -147,7 +146,7 @@ class RevenueServiceTest {
     @Test
     fun `given session inexistente when addRevenue then lanca IllegalStateException e nao persiste ledger`() {
         // given
-        `when`(sessions.findById(sessionId)).thenReturn(Optional.empty())
+        `when`(sessionService.findById(sessionId)).thenReturn(null)
 
         // when / then
         assertFailsWith<IllegalStateException> { service.addRevenue(anyEvent) }
@@ -176,7 +175,7 @@ class RevenueServiceTest {
     fun `given sector da session removido do banco when addRevenue then lanca SectorMissingException`() {
         // given
         stubSession(session())
-        `when`(sectors.findByName("A")).thenReturn(null)
+        `when`(sectorService.findByName("A")).thenReturn(null)
 
         // when / then
         assertFailsWith<SectorMissingException> { service.addRevenue(anyEvent) }
@@ -228,7 +227,7 @@ class RevenueServiceTest {
     }
 
     private fun stubSectorExists(name: String) {
-        `when`(sectors.findByName(name)).thenReturn(
+        `when`(sectorService.findByName(name)).thenReturn(
             Sector(
                 name = name,
                 basePrice = BigDecimal("10.00"),
@@ -258,11 +257,11 @@ class RevenueServiceTest {
     )
 
     private fun stubSession(session: ParkingSession) {
-        `when`(sessions.findById(sessionId)).thenReturn(Optional.of(session))
+        `when`(sessionService.findById(sessionId)).thenReturn(session)
     }
 
     private fun stubSectorWithPrice(name: String, basePrice: BigDecimal) {
-        `when`(sectors.findByName(name)).thenReturn(
+        `when`(sectorService.findByName(name)).thenReturn(
             Sector(
                 name = name,
                 basePrice = basePrice,

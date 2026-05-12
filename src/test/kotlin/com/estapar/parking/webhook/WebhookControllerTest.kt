@@ -1,8 +1,8 @@
 package com.estapar.parking.webhook
 
+import com.estapar.parking.domain.SessionAlreadyOpenException
+import com.estapar.parking.domain.SessionNotFoundException
 import com.estapar.parking.garage.GarageService
-import com.estapar.parking.garage.SessionAlreadyOpenException
-import com.estapar.parking.garage.SessionNotFoundException
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
@@ -35,7 +35,7 @@ class WebhookControllerTest {
     }
 
     @Test
-    fun `given service lanca WebhookEventIgnored when receive then responde 200 e nao propaga`() {
+    fun `given service lanca DomainRuleViolation when receive then responde 200 e nao propaga`() {
         // given
         doThrow(SessionAlreadyOpenException(plate))
             .`when`(garage).registerEntry(plate, entryTime)
