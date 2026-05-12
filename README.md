@@ -78,10 +78,11 @@ Regras-chave (detalhes em [`docs/contexto.md`](docs/contexto.md)):
 ```
 com.estapar.parking
 ├── EstaparParkingApplication.kt
-├── config/        infra (RestClient, properties, OpenAPI)
+├── config/        infra (RestClient, Clock, properties, OpenAPI)
 ├── domain/        entidades JPA + repositórios
 ├── simulator/     cliente HTTP do simulador + bootstrap inicial
-├── webhook/       POST /webhook + handlers de evento (ENTRY, PARKED, EXIT)
+├── garage/        regras de negócio (ENTRY/PARKED/EXIT) + PricingPolicy
+├── webhook/       POST /webhook (transporte; delega ao garage)
 └── revenue/       GET /revenue + cálculo de faturamento
 ```
 
@@ -108,17 +109,23 @@ Discriminado por `event_type`:
 | `PARKED` | `license_plate`, `lat`, `lng` | Veículo estacionou em uma vaga |
 | `EXIT` | `license_plate`, `exit_time` | Veículo saiu (calcula valor) |
 
-Resposta: `200 OK` com corpo vazio.
+Resposta: **`200 OK` sempre** com corpo vazio. Eventos inválidos (placa sem sessão aberta, vaga já ocupada, replay de `ENTRY`, etc.) são logados e ignorados — o simulador nunca recebe erro pelo webhook.
 
 ### `GET /revenue`
 
-```json
-// request
-{ "date": "2025-01-01", "sector": "A" }
-
-// response
-{ "amount": 0.00, "currency": "BRL", "timestamp": "2025-01-01T12:00:00.000Z" }
+```bash
+curl -s -X GET http://localhost:3003/revenue \
+  -H 'Content-Type: application/json' \
+  -d '{"date":"2026-05-11","sector":"A"}'
 ```
+
+```json
+{ "amount": 121.50, "currency": "BRL", "timestamp": "2026-05-11T15:30:00.000Z" }
+```
+
+- Sem sessões encerradas no dia: `amount` é `0.00`.
+- Setor inexistente: **`404 Not Found`**.
+- Janela do dia em UTC (`[date 00:00:00Z, date+1 00:00:00Z)`).
 
 ### Spec OpenAPI / Swagger UI
 
@@ -142,6 +149,7 @@ Antes de implementar ou opinar, consulte:
 - [`docs/contexto.md`](docs/contexto.md) — o que a aplicação faz, atores, endpoints, modelo de dados e regras de negócio.
 - [`docs/arquitetura.md`](docs/arquitetura.md) — arquitetura em camadas, decisões técnicas, princípios de código (Clean Code, SOLID, KISS/DRY/YAGNI), Kotlin idiomático, padrão de testes e checklist de PR.
 - [`docs/garage-simulator.md`](docs/garage-simulator.md) — contrato do simulador externo.
+- [`docs/features/`](docs/features) — um doc por feature (`entry`, `parked`, `exit`, `revenue`) com decisões de design, riscos e checklist de execução.
 
 ## Governança e uso de IA
 
