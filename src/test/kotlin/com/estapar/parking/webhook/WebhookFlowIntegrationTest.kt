@@ -72,7 +72,7 @@ class WebhookFlowIntegrationTest {
     }
 
     @Test
-    fun `given garagem com setor A e uma vaga when fluxo completo ENTRY PARKED EXIT then session fechada com amount_charged correto e spot liberado`() {
+    fun `given garagem com setor A e uma vaga when fluxo completo ENTRY PARKED EXIT then session fechada e spot liberado`() {
         // given (setup pré-popula sector A + 1 spot)
 
         // when ENTRY
@@ -115,11 +115,9 @@ class WebhookFlowIntegrationTest {
             status { isOk() }
         }
 
-        // then EXIT calculou tarifa (1h × 40.50 × 0.900 = 36.45), gravou exit_time e liberou vaga
+        // then EXIT gravou exit_time e liberou vaga (receita coberta em RevenueFlowIntegrationTest)
         val afterExit = sessions.findAll().single { it.licensePlate == plate }
         assertNotNull(afterExit.exitTime)
-        assertNotNull(afterExit.amountCharged)
-        assertEquals(0, BigDecimal("36.45").compareTo(afterExit.amountCharged))
         assertEquals(false, spots.findById(1L).orElseThrow().occupied)
         assertTrue(sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate) == null)
     }
@@ -142,11 +140,10 @@ class WebhookFlowIntegrationTest {
             status { isOk() }
         }
 
-        // then sessão permanece aberta (não fechada nem precificada)
+        // then sessão permanece aberta (não fechada nem estacionada)
         val open = sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate)
         assertNotNull(open)
         assertNull(open.exitTime)
-        assertNull(open.amountCharged)
         assertNull(open.spotId)
     }
 

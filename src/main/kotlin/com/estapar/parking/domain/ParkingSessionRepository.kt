@@ -35,8 +35,7 @@ interface ParkingSessionRepository : JpaRepository<ParkingSession, Long> {
     @Query(
         """
         UPDATE ParkingSession s
-           SET s.exitTime = :exitTime,
-               s.amountCharged = :amount
+           SET s.exitTime = :exitTime
          WHERE s.id = :id
            AND s.exitTime IS NULL
         """
@@ -44,22 +43,5 @@ interface ParkingSessionRepository : JpaRepository<ParkingSession, Long> {
     fun markExited(
         @Param("id") id: Long,
         @Param("exitTime") exitTime: Instant,
-        @Param("amount") amount: BigDecimal,
     ): Int
-
-    @Query(
-        """
-        SELECT COALESCE(SUM(s.amountCharged), 0)
-        FROM ParkingSession s
-        WHERE s.sector = :sector
-          AND s.exitTime IS NOT NULL
-          AND s.exitTime >= :start
-          AND s.exitTime < :end
-        """
-    )
-    fun sumRevenue(
-        @Param("sector") sector: String,
-        @Param("start") start: Instant,
-        @Param("end") end: Instant,
-    ): BigDecimal
 }

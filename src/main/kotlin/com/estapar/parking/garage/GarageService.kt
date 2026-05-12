@@ -4,6 +4,8 @@ import com.estapar.parking.domain.ParkingSession
 import com.estapar.parking.domain.ParkingSessionRepository
 import com.estapar.parking.domain.SectorRepository
 import com.estapar.parking.domain.SpotRepository
+import com.estapar.parking.revenue.AddToRevenueEvent
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -18,6 +20,7 @@ class GarageService(
     private val sectors: SectorRepository,
     private val clock: Clock,
     private val pricing: PricingPolicy,
+    private val events: ApplicationEventPublisher,
 ) {
 
     @Transactional
@@ -77,27 +80,22 @@ class GarageService(
         val session = sessions.findFirstByLicensePlateAndExitTimeIsNullOrderByEntryTimeDesc(plate)
             ?: throw SessionNotFoundException(plate)
         val spotId = session.spotId ?: throw SessionNotParkedException(plate)
-        val sectorName = session.sector ?: throw SessionNotParkedException(plate)
-        val multiplier = session.priceMultiplier ?: throw SessionNotParkedException(plate)
+        session.sector ?: throw SessionNotParkedException(plate)
+        session.priceMultiplier ?: throw SessionNotParkedException(plate)
 
         val exitInstant = time.toInstant(ZoneOffset.UTC)
-        val seconds = Duration.between(session.entryTime, exitInstant).seconds
-        if (seconds < 0) error("exit_time anterior a entry_time para placa $plate")
+        if (Duration.between(session.entryTime, exitInstant).isNegative) {
+            error("exit_time anterior a entry_time para placa $plate")
+        }
 
         val spot = spots.findById(spotId).orElse(null)
             ?: error("Spot $spotId referenciado pela sessão $plate não existe")
-        val sector = sectors.findByName(sectorName)
-            ?: throw SectorMissingException(sectorName)
 
-        val amount = pricing.feeFor(seconds, sector.basePrice, multiplier)
-
-        val closed = sessions.markExited(
-            id = requireNotNull(session.id) { "session sem id" },
-            exitTime = exitInstant,
-            amount = amount,
-        )
+        val sessionId = requireNotNull(session.id) { "session sem id" }
+        val closed = sessions.markExited(id = sessionId, exitTime = exitInstant)
         if (closed == 0) throw SessionAlreadyExitedException(plate)
 
         spot.occupied = false
+        events.publishEvent(AddToRevenueEvent(sessionId, exitInstant))
     }
 }

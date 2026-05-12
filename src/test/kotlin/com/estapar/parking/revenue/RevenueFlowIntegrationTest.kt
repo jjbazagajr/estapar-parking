@@ -1,9 +1,11 @@
 package com.estapar.parking.revenue
 
-import com.estapar.parking.domain.ParkingSession
 import com.estapar.parking.domain.ParkingSessionRepository
+import com.estapar.parking.domain.RevenueLedgerRepository
 import com.estapar.parking.domain.Sector
 import com.estapar.parking.domain.SectorRepository
+import com.estapar.parking.domain.Spot
+import com.estapar.parking.domain.SpotRepository
 import com.jayway.jsonpath.JsonPath
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -14,8 +16,8 @@ import org.springframework.http.MediaType
 import org.springframework.test.context.TestPropertySource
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.post
 import java.math.BigDecimal
-import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
@@ -38,17 +40,30 @@ class RevenueFlowIntegrationTest {
     @Autowired
     private lateinit var mockMvc: MockMvc
 
-    private var plateSeq = 0
-
     @Autowired
     private lateinit var sectors: SectorRepository
 
     @Autowired
+    private lateinit var spots: SpotRepository
+
+    @Autowired
     private lateinit var sessions: ParkingSessionRepository
+
+    @Autowired
+    private lateinit var ledger: RevenueLedgerRepository
+
+    private val spotALat = -23.561684
+    private val spotALng = -46.655981
+    private val spotBLat = -23.561700
+    private val spotBLng = -46.656000
+
+    private var plateSeq = 0
 
     @BeforeEach
     fun setup() {
+        ledger.deleteAll()
         sessions.deleteAll()
+        spots.deleteAll()
         sectors.deleteAll()
         sectors.save(
             Sector(
@@ -68,48 +83,53 @@ class RevenueFlowIntegrationTest {
                 closeHour = null,
             ),
         )
+        spots.save(Spot(id = 1L, sector = "A", lat = spotALat, lng = spotALng, occupied = false))
+        spots.save(Spot(id = 2L, sector = "B", lat = spotBLat, lng = spotBLng, occupied = false))
     }
 
     @Test
-    fun `given sessoes encerradas no dia em setores diferentes when GET revenue then soma apenas o setor e dia consultados`() {
-        // given quatro sessoes encerradas em janelas diferentes
-        persistClosedSession(
+    fun `given EXIT em datas e setores distintos when GET revenue then soma apenas o setor e dia consultados via ledger`() {
+        // given quatro fluxos completos com EXIT em janelas e setores diferentes
+        simulateFullFlow(
             sector = "A",
-            exitAt = Instant.parse("2026-05-10T00:00:00Z"),
-            amount = BigDecimal("40.50"),
+            entry = "2026-05-09T23:00:00",
+            exit = "2026-05-10T00:00:00",
         )
-        persistClosedSession(
+        simulateFullFlow(
             sector = "A",
-            exitAt = Instant.parse("2026-05-10T23:59:59Z"),
-            amount = BigDecimal("81.00"),
+            entry = "2026-05-10T22:00:00",
+            exit = "2026-05-10T23:59:59",
         )
-        persistClosedSession(
+        simulateFullFlow(
             sector = "B",
-            exitAt = Instant.parse("2026-05-10T12:00:00Z"),
-            amount = BigDecimal("10.25"),
+            entry = "2026-05-10T07:00:00",
+            exit = "2026-05-10T12:00:00",
         )
-        persistClosedSession(
+        simulateFullFlow(
             sector = "A",
-            exitAt = Instant.parse("2026-05-11T00:00:00Z"),
-            amount = BigDecimal("99.99"),
+            entry = "2026-05-10T23:00:00",
+            exit = "2026-05-11T00:00:00",
         )
 
         // when consulta setor A no dia 10
         val body = getRevenueBody(date = "2026-05-10", sector = "A")
 
-        // then soma somente as duas sessoes do setor A com exit_time em [10/05 00:00, 11/05 00:00)
-        assertEquals(0, BigDecimal("121.50").compareTo(amountFrom(body)))
+        // then soma somente as duas saídas do setor A com earned_at em [10/05 00:00, 11/05 00:00) UTC
+        // primeira saída: 1h × 40.50 × 0.900 = 36.45 (multiplier 0.90 porque sector estava em 0% no PARKED)
+        // segunda saída: 2h × 40.50 × 0.900 = 72.90
+        assertEquals(0, BigDecimal("109.35").compareTo(amountFrom(body)))
         assertEquals("BRL", JsonPath.read<String>(body, "$.currency"))
         assertNotNull(JsonPath.read<String>(body, "$.timestamp"))
+        assertEquals(4, ledger.count())
     }
 
     @Test
-    fun `given nenhuma sessao encerrada no dia consultado when GET revenue then retorna 0_00 com currency BRL`() {
-        // given uma sessao do setor A em outro dia
-        persistClosedSession(
+    fun `given nenhum EXIT no dia consultado when GET revenue then retorna 0_00 com currency BRL`() {
+        // given um fluxo encerrado em outro dia
+        simulateFullFlow(
             sector = "A",
-            exitAt = Instant.parse("2026-05-09T12:00:00Z"),
-            amount = BigDecimal("40.50"),
+            entry = "2026-05-09T11:00:00",
+            exit = "2026-05-09T12:00:00",
         )
 
         // when consulta setor A no dia 10
@@ -133,19 +153,30 @@ class RevenueFlowIntegrationTest {
         }
     }
 
-    private fun persistClosedSession(sector: String, exitAt: Instant, amount: BigDecimal) {
-        sessions.save(
-            ParkingSession(
-                licensePlate = "PLT${++plateSeq}",
-                entryTime = exitAt.minusSeconds(3600),
-                priceMultiplier = BigDecimal("1.000"),
-                sector = sector,
-                spotId = null,
-                parkedTime = exitAt.minusSeconds(3000),
-                exitTime = exitAt,
-                amountCharged = amount,
-            ),
-        )
+    private fun simulateFullFlow(sector: String, entry: String, exit: String) {
+        val plate = "PLT${++plateSeq}"
+        val (lat, lng) = spotFor(sector)
+
+        mockMvc.post("/webhook") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"event_type":"ENTRY","license_plate":"$plate","entry_time":"$entry"}"""
+        }.andExpect { status { isOk() } }
+
+        mockMvc.post("/webhook") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"event_type":"PARKED","license_plate":"$plate","lat":$lat,"lng":$lng}"""
+        }.andExpect { status { isOk() } }
+
+        mockMvc.post("/webhook") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"event_type":"EXIT","license_plate":"$plate","exit_time":"$exit"}"""
+        }.andExpect { status { isOk() } }
+    }
+
+    private fun spotFor(sector: String): Pair<Double, Double> = when (sector) {
+        "A" -> spotALat to spotALng
+        "B" -> spotBLat to spotBLng
+        else -> error("setor $sector sem vaga registrada no teste")
     }
 
     private fun getRevenueBody(date: String, sector: String): String =

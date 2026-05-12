@@ -37,7 +37,4 @@ class ParkingSession(
 
     @Column(name = "exit_time")
     var exitTime: Instant? = null,
-
-    @Column(name = "amount_charged")
-    var amountCharged: BigDecimal? = null,
 )
