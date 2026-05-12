@@ -33,7 +33,7 @@ class GarageServiceTest {
     private val sectors: SectorRepository = mock(SectorRepository::class.java)
     private val fixedInstant: Instant = Instant.parse("2026-05-10T12:00:00Z")
     private val clock: Clock = Clock.fixed(fixedInstant, ZoneOffset.UTC)
-    private val service = GarageService(sessions, spots, sectors, clock)
+    private val service = GarageService(sessions, spots, sectors, clock, PricingPolicy())
 
     private val anyTime: LocalDateTime = LocalDateTime.of(2026, 5, 10, 12, 0)
     private val plate = "ABC1D23"

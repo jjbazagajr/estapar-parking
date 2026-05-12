@@ -6,8 +6,6 @@ import com.estapar.parking.domain.SectorRepository
 import com.estapar.parking.domain.SpotRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import java.math.BigDecimal
-import java.math.RoundingMode
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDateTime
@@ -19,6 +17,7 @@ class GarageService(
     private val spots: SpotRepository,
     private val sectors: SectorRepository,
     private val clock: Clock,
+    private val pricing: PricingPolicy,
 ) {
 
     @Transactional
@@ -58,7 +57,7 @@ class GarageService(
         val occupied = spots.countBySectorAndOccupiedTrue(sector.name)
         if (occupied >= sector.maxCapacity) throw SectorFullException(sector.name)
 
-        val multiplier = priceMultiplierFor(occupied.toDouble() / sector.maxCapacity)
+        val multiplier = pricing.multiplierFor(occupied.toDouble() / sector.maxCapacity)
 
         val taken = spots.tryOccupy(spot.id)
         if (taken == 0) throw SpotAlreadyOccupiedException(lat, lng)
@@ -90,7 +89,7 @@ class GarageService(
         val sector = sectors.findByName(sectorName)
             ?: throw SectorMissingException(sectorName)
 
-        val amount = calculateFee(seconds, sector.basePrice, multiplier)
+        val amount = pricing.feeFor(seconds, sector.basePrice, multiplier)
 
         val closed = sessions.markExited(
             id = requireNotNull(session.id) { "session sem id" },
@@ -100,27 +99,5 @@ class GarageService(
         if (closed == 0) throw SessionAlreadyExitedException(plate)
 
         spot.occupied = false
-    }
-
-    private fun priceMultiplierFor(occupancy: Double): BigDecimal = when {
-        occupancy < 0.25 -> EMPTY
-        occupancy < 0.50 -> NORMAL
-        occupancy < 0.75 -> HIGH
-        else -> PEAK
-    }
-
-    private fun calculateFee(seconds: Long, basePrice: BigDecimal, multiplier: BigDecimal): BigDecimal {
-        if (seconds <= GRACE_PERIOD_SECONDS) return BigDecimal.ZERO.setScale(2)
-        val hours = Math.ceilDiv(seconds, SECONDS_PER_HOUR).toBigDecimal()
-        return basePrice.multiply(hours).multiply(multiplier).setScale(2, RoundingMode.HALF_EVEN)
-    }
-
-    private companion object {
-        val EMPTY = BigDecimal("0.90")
-        val NORMAL = BigDecimal("1.00")
-        val HIGH = BigDecimal("1.10")
-        val PEAK = BigDecimal("1.25")
-        const val GRACE_PERIOD_SECONDS = 30L * 60
-        const val SECONDS_PER_HOUR = 3600L
     }
 }
